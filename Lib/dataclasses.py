@@ -509,7 +509,7 @@ class _FuncBuilder:
         for name, fn in zip(self.names, fns):
             fn.__qualname__ = f"{cls.__qualname__}.{fn.__name__}"
             if annotations := self.method_annotations.get(name):
-                fn.__annotate__ = self.make_annotate_function(annotations)
+                fn.__annotate__ = _AnnotateFunction(annotations)
 
             if self.unconditional_adds.get(name, False):
                 setattr(cls, name, fn)
@@ -525,33 +525,41 @@ class _FuncBuilder:
 
                     raise TypeError(error_msg)
 
-    @staticmethod
-    def make_annotate_function(annotations):
-        # Create an __annotate__ function for a dataclass
-        # Try to return annotations in the same format as they would be
-        # from a regular __init__ function
-        def __annotate__(format):
-            match format:
-                case annotationlib.Format.VALUE | annotationlib.Format.FORWARDREF:
-                    return {
-                        k: v.evaluate(format=format)
-                        if isinstance(v, annotationlib.ForwardRef) else v
-                        for k, v in annotations.items()
-                    }
-                case annotationlib.Format.STRING:
-                    string_annos = {}
-                    for k, v in annotations.items():
-                        if isinstance(v, str):
-                            string_annos[k] = v
-                        elif isinstance(v, annotationlib.ForwardRef):
-                            string_annos[k] = v.evaluate(format=annotationlib.Format.STRING)
-                        else:
-                            string_annos[k] = annotationlib.type_repr(v)
-                    return string_annos
-                case _:
-                    raise NotImplementedError(format)
 
-        return __annotate__
+class _AnnotateFunction:
+    # This is a class to allow for updating `annotations` without regenerating the function
+    # Necessary for slotted classes to remove references to the original class
+    __slots__ = ("annotations", )
+
+    def __init__(self, annotations):
+        self.annotations = annotations
+
+    def __call__(self, format, /):
+        match format:
+            case annotationlib.Format.VALUE | annotationlib.Format.FORWARDREF:
+                return {
+                    k: v.evaluate(format=format)
+                    if isinstance(v, annotationlib.ForwardRef) else v
+                    for k, v in self.annotations.items()
+                }
+            case annotationlib.Format.STRING:
+                string_annos = {}
+                for k, v in self.annotations.items():
+                    if isinstance(v, str):
+                        string_annos[k] = v
+                    elif isinstance(v, annotationlib.ForwardRef):
+                        string_annos[k] = v.evaluate(format=annotationlib.Format.STRING)
+                    else:
+                        string_annos[k] = annotationlib.type_repr(v)
+                return string_annos
+            case _:
+                raise NotImplementedError(format)
+
+    def update_annotations(self, new_annotations):
+        # Replace annotations that refer to the old unslotted class
+        for name in new_annotations:
+            if name in self.annotations:
+                self.annotations[name] = new_annotations[name]
 
 
 def _field_assign(frozen, name, value, self_name):
@@ -1367,6 +1375,26 @@ def _add_slots(cls, is_frozen, weakref_slot, defined_fields):
                 or _update_func_cell_for__class__(member.fset, cls, newcls)
                 or _update_func_cell_for__class__(member.fdel, cls, newcls)):
                 break
+
+    # Get annotations that refer to the new class to use to replace old types
+    new_annotations = annotationlib.get_annotations(
+        newcls,
+        format=annotationlib.Format.FORWARDREF,
+    )
+
+    # Replace types in _FIELDS that may contain references
+    for f in getattr(newcls, _FIELDS).values():
+        if f.name in new_annotations:
+            f.type = new_annotations[f.name]
+
+    # Replace types in __init__.__annotate__ that may contain references
+    try:
+        annotate_func = newcls.__init__.__annotate__
+        if isinstance(annotate_func, _AnnotateFunction):
+            annotate_func.update_annotations(new_annotations)
+    except AttributeError:
+        # no __init__ or no __annotate__
+        pass
 
     return newcls
 
