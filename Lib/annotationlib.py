@@ -1059,7 +1059,7 @@ def get_annotations(
                 return dict(ann)
             ann = _get_dunder_annotations(obj)
             if ann is not None:
-                return {k, DeferredReference(v) for k, v in ann.items()}
+                return {k: DeferredReference(v) for k, v in ann.items()}
         case Format.VALUE_WITH_FAKE_GLOBALS:
             raise ValueError("The VALUE_WITH_FAKE_GLOBALS format is for internal use only")
         case _:
