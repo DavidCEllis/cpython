@@ -25,6 +25,7 @@ class Format(enum.IntEnum):
     FORWARDREF = 3
     STRING = 4
     AST = 5
+    DEFERRED = 6
 
 
 _sentinel = object()
@@ -115,6 +116,13 @@ class ForwardRef:
         match format:
             case Format.STRING:
                 return self.__forward_arg__
+            case Format.DEFERRED:
+                return self
+            case Format.AST:
+                if self.__ast_node__:
+                    return self.__ast_node__
+                else:
+                    return ast.Name(id=self.__forward_arg__)
             case Format.VALUE:
                 is_forwardref_format = False
             case Format.FORWARDREF:
@@ -721,7 +729,7 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
         return annotate(format)
     except NotImplementedError:
         pass
-    if format in {Format.STRING, Format.AST}:
+    if format in {Format.STRING, Format.AST, Format.DEFERRED}:
         # STRING is implemented by calling the annotate function in a special
         # environment where every name lookup results in an instance of _Stringifier.
         # _Stringifier supports every dunder operation and returns a new _Stringifier.
@@ -746,7 +754,7 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
 
         globals = _StringifierDict({}, format=format)
         is_class = isinstance(owner, type)
-        closure, _ = _build_closure(
+        closure, cell_dict = _build_closure(
             annotate, owner, is_class, globals, allow_evaluation=False
         )
         func = types.FunctionType(
@@ -765,13 +773,26 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
                 key: _stringify_single(val)
                 for key, val in annos.items()
             }
-        else:
+        elif format == Format.AST:
             if _is_evaluate:
                 return _astify_single(annos)
             return {
                 key: _astify_single(val)
                 for key, val in annos.items()
             }
+        else:
+            # Sketch behaviour for non-forwardref items such as constants
+            globals.transmogrify(cell_dict)
+            if _is_evaluate:
+                if isinstance(annos, ForwardRef):
+                    return annos
+                else:
+                    return ForwardRef(annos if isinstance(annos, str) else type_repr(annos))
+            else:
+                return {
+                    key: val if isinstance(val, ForwardRef) else ForwardRef(val if isinstance(val, str) else type_repr(val))
+                    for key, val in annos.items()
+                }
 
     elif format == Format.FORWARDREF:
         # FORWARDREF is implemented similarly to STRING, but there are two changes,
@@ -1030,6 +1051,13 @@ def get_annotations(
             ann = _get_dunder_annotations(obj)
             if ann is not None:
                 return annotations_to_ast(ann)
+        case Format.DEFERRED:
+            ann = _get_and_call_annotate(obj, format)
+            if ann is not None:
+                return dict(ann)
+            ann = _get_dunder_annotations(obj)
+            if ann is not None:
+                return ann  # This should make fake "ForwardRef" objects, doesn't yet
         case Format.VALUE_WITH_FAKE_GLOBALS:
             raise ValueError("The VALUE_WITH_FAKE_GLOBALS format is for internal use only")
         case _:
@@ -1198,3 +1226,20 @@ def _get_dunder_annotations(obj):
     if not isinstance(ann, dict):
         raise ValueError(f"{obj!r}.__annotations__ is neither a dict nor None")
     return ann
+
+
+def make_annotate_function(annos):
+    """Create a new __annotate__ function from deferred annotations"""
+    forward_annos = {
+        k: v if isinstance(v, ForwardRef) else ForwardRef(v if isinstance(v, str) else type_repr(v))
+        for k, v in annos.items()
+    }
+
+    def __annotate__(format, /):
+        match format:
+            case Format.VALUE | Format.FORWARDREF | Format.STRING | Format.AST:
+                return {k: v.evaluate(format) for k, v in forward_annos.items()}
+            case Format.DEFERRED:
+                return forward_annos
+            case _:
+                raise NotImplementedError(format)
