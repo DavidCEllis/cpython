@@ -122,7 +122,7 @@ class ForwardRef:
                 if self.__ast_node__:
                     return self.__ast_node__
                 else:
-                    return ast.Name(id=self.__forward_arg__)
+                    return compile(self.__forward_arg__, "<annotate>", "eval", flags=ast.PyCF_ONLY_AST).body
             case Format.VALUE:
                 is_forwardref_format = False
             case Format.FORWARDREF:
