@@ -1238,7 +1238,7 @@ def make_annotate_function(annos):
     def __annotate__(format, /):
         match format:
             case Format.VALUE | Format.FORWARDREF | Format.STRING | Format.AST:
-                return {k: v.evaluate(format) for k, v in forward_annos.items()}
+                return {k: v.evaluate(format=format) for k, v in forward_annos.items()}
             case Format.DEFERRED:
                 return forward_annos
             case _:
