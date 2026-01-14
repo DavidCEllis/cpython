@@ -1234,3 +1234,4 @@ def make_annotate_function(annos):
                 return forward_annos
             case _:
                 raise NotImplementedError(format)
+    return __annotate__
