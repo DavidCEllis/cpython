@@ -747,8 +747,10 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
             # Both STRING and VALUE_WITH_FAKE_GLOBALS are not implemented: fallback to VALUE
             if format == Format.STRING:
                 return annotations_to_string(annotate(Format.VALUE))
-            else:
+            elif format == Format.AST:
                 return annotations_to_ast(annotate(Format.VALUE))
+            else:
+                return {k: DeferredReference(v) for k, v in annotate(Format.VALUE)}
         except Exception:
             pass
 
