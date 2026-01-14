@@ -24,6 +24,7 @@ class Format(enum.IntEnum):
     VALUE_WITH_FAKE_GLOBALS = 2
     FORWARDREF = 3
     STRING = 4
+    AST = 5
 
 
 _sentinel = object()
@@ -720,7 +721,7 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
         return annotate(format)
     except NotImplementedError:
         pass
-    if format == Format.STRING:
+    if format in {Format.STRING, Format.AST}:
         # STRING is implemented by calling the annotate function in a special
         # environment where every name lookup results in an instance of _Stringifier.
         # _Stringifier supports every dunder operation and returns a new _Stringifier.
@@ -736,7 +737,10 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
             annotate(Format.VALUE_WITH_FAKE_GLOBALS)
         except NotImplementedError:
             # Both STRING and VALUE_WITH_FAKE_GLOBALS are not implemented: fallback to VALUE
-            return annotations_to_string(annotate(Format.VALUE))
+            if format == Format.STRING:
+                return annotations_to_string(annotate(Format.VALUE))
+            else:
+                return annotations_to_ast(annotate(Format.VALUE))
         except Exception:
             pass
 
@@ -753,12 +757,22 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
             kwdefaults=annotate.__kwdefaults__,
         )
         annos = func(Format.VALUE_WITH_FAKE_GLOBALS)
-        if _is_evaluate:
-            return _stringify_single(annos)
-        return {
-            key: _stringify_single(val)
-            for key, val in annos.items()
-        }
+
+        if format == Format.STRING:
+            if _is_evaluate:
+                return _stringify_single(annos)
+            return {
+                key: _stringify_single(val)
+                for key, val in annos.items()
+            }
+        else:
+            if _is_evaluate:
+                return _astify_single(annos)
+            return {
+                key: _astify_single(val)
+                for key, val in annos.items()
+            }
+
     elif format == Format.FORWARDREF:
         # FORWARDREF is implemented similarly to STRING, but there are two changes,
         # at the beginning and the end of the process.
@@ -892,6 +906,21 @@ def _stringify_single(anno):
         return repr(anno)
 
 
+def _astify_single(anno):
+    if anno is ...:
+        return ast.Constant(value=Ellipsis, kind=None)
+    elif isinstance(anno, str):
+        return _string_to_ast(anno)
+    elif isinstance(anno, _Template):
+        return _template_to_ast(anno)
+    elif isinstance(anno, _Stringifier):
+        # Stringifiers already have their AST
+        # Currently name mangled
+        return anno._Stringifier__get_ast()
+    else:
+        return _string_to_ast(type_repr(anno))
+
+
 def get_annotate_from_class_namespace(obj):
     """Retrieve the annotate function from a class namespace dictionary.
 
@@ -994,6 +1023,13 @@ def get_annotations(
             ann = _get_dunder_annotations(obj)
             if ann is not None:
                 return annotations_to_string(ann)
+        case Format.AST:
+            ann = _get_and_call_annotate(obj, format)
+            if ann is not None:
+                return dict(ann)
+            ann = _get_dunder_annotations(obj)
+            if ann is not None:
+                return annotations_to_ast(ann)
         case Format.VALUE_WITH_FAKE_GLOBALS:
             raise ValueError("The VALUE_WITH_FAKE_GLOBALS format is for internal use only")
         case _:
@@ -1089,6 +1125,13 @@ def type_repr(value):
         return "..."
     return repr(value)
 
+def _string_to_ast(annotation_string):
+    return compile(
+        annotation_string,
+        "<string>",
+        "eval",
+        flags=ast.PyCF_ONLY_AST
+    ).body
 
 def annotations_to_string(annotations):
     """Convert an annotation dict containing values to approximately the STRING format.
@@ -1100,6 +1143,11 @@ def annotations_to_string(annotations):
         for n, t in annotations.items()
     }
 
+def annotations_to_ast(annotations):
+    return {
+        n: _string_to_ast(t if isinstance(t, str) else type_repr(t))
+        for n, t in annotations.items()
+    }
 
 def _rewrite_star_unpack(arg):
     """If the given argument annotation expression is a star unpack e.g. `'*Ts'`
