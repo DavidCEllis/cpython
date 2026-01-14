@@ -790,7 +790,7 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
                     return ForwardRef(annos if isinstance(annos, str) else type_repr(annos))
             else:
                 return {
-                    key: val if isinstance(val, ForwardRef) else ForwardRef(val if isinstance(val, str) else type_repr(val))
+                    key: val if isinstance(val, ForwardRef) else DeferredReference(val)
                     for key, val in annos.items()
                 }
 
@@ -1228,10 +1228,45 @@ def _get_dunder_annotations(obj):
     return ann
 
 
+class DeferredReference:
+    """
+    This exists to handle evaluating objects that have already been evaluated
+    in the required formats.
+    """
+    __slots__ = ("obj", "as_str")
+    def __init__(self, obj, as_str=None):
+        self.obj = obj
+        if as_str is not None:
+            self.as_str = as_str
+        elif isinstance(obj, str):
+            self.as_str = obj
+        else:
+            self.as_str = type_repr(obj)
+
+    def __repr__(self):
+        if self.as_str == self.obj or self.as_str == type_repr(self.obj):
+            return f"{self.__class__.__name__}({self.obj!r})"
+        else:
+            return f"{self.__class__.__name__}({self.obj!r}, as_str={self.as_str!r})"
+
+    def evaluate(self, format=Format.VALUE):
+        match format:
+            case Format.DEFERRED:
+                return self
+            case Format.VALUE | Format.FORWARDREF:
+                return self.obj
+            case Format.STRING:
+                return self.as_str
+            case Format.AST:
+                return compile(self.as_str, "<annotate>", "eval", flags=ast.PyCF_ONLY_AST).body
+            case _:
+                raise NotImplementedError(format)
+
+
 def make_annotate_function(annos):
     """Create a new __annotate__ function from deferred annotations"""
     forward_annos = {
-        k: v if isinstance(v, ForwardRef) else ForwardRef(v if isinstance(v, str) else type_repr(v))
+        k: v if isinstance(v, (ForwardRef, DeferredReference)) else DeferredReference(v)
         for k, v in annos.items()
     }
 
