@@ -66,35 +66,34 @@ class EvaluationContext:
         self._is_class = is_class
         self._cell = cell
 
-    def _get_stringifier_locals(self):
-        # All variables, in scoping order, should be checked before
-        # triggering __missing__ to create a _Stringifier.
-        return _StringifierDict(
-            {**builtins.__dict__, **self.globals, **self.locals},
+    def evaluate_ast(self, ast_obj, use_forwardref=False, extra_names=None):
+        # make into an Expression
+        expr = ast.fix_missing_locations(ast.Expression(body=ast_obj))
+        code = compile(expr, "<annotate>", "eval")
+        return self.evaluate_code(code, use_forwardref=use_forwardref, extra_names=extra_names)
+
+    def evaluate_string(self, source, use_forwardref=False, extra_names=None):
+        code = compile(source, "<annotate>", "eval")
+        return self.evaluate_code(code, use_forwardref=use_forwardref, extra_names=extra_names)
+
+    def evaluate_code(self, code, use_forwardref=False, extra_names=None):
+        locals = dict(self.locals)
+        if extra_names is not None:
+            locals.update(extra_names)
+
+        try:
+            return eval(code, globals=self.globals, locals=locals)
+        except Exception:
+            if not use_forwardref:
+                raise
+
+        new_locals = _StringifierDict(
+            {**builtins.__dict__, **self.globals, **locals},
             globals=self.globals,
             owner=self._owner,
             is_class=self._is_class,
             format=Format.FORWARDREF,
         )
-
-    def evaluate_ast(self, ast_obj, use_forwardref=False):
-        # make into an Expression
-        expr = ast.fix_missing_locations(ast.Expression(body=ast_obj))
-        code = compile(expr, "<annotate>", "eval")
-        return self.evaluate_code(code, use_forwardref=use_forwardref)
-
-    def evaluate_string(self, source, use_forwardref=False):
-        code = compile(source, "<annotate>", "eval")
-        return self.evaluate_code(code, use_forwardref=use_forwardref)
-
-    def evaluate_code(self, code, use_forwardref=False):
-        try:
-            return eval(code, globals=self.globals, locals=self.locals)
-        except Exception:
-            if not use_forwardref:
-                raise
-
-        new_locals = self._get_stringifier_locals()
 
         result = eval(code, globals=self.globals, locals=new_locals)
         new_locals.transmogrify(self._cell)
