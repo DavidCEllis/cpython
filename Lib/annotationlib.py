@@ -24,8 +24,7 @@ class Format(enum.IntEnum):
     VALUE_WITH_FAKE_GLOBALS = 2
     FORWARDREF = 3
     STRING = 4
-    AST = 5
-    DEFERRED = 6
+    DEFERRED = 5
 
 
 _sentinel = object()
@@ -50,6 +49,56 @@ _SLOTS = (
     "__owner__",
     "__stringifier_dict__",
 )
+
+
+class EvaluationContext:
+    __slots__ = (
+        "globals",
+        "locals",
+        "_owner",
+        "_is_class",
+        "_cell",
+    )
+    def __init__(self, *, globals, locals, owner, is_class, cell):
+        self.globals = globals
+        self.locals = locals
+        self._owner = owner
+        self._is_class = is_class
+        self._cell = cell
+
+    def _get_stringifier_locals(self):
+        # All variables, in scoping order, should be checked before
+        # triggering __missing__ to create a _Stringifier.
+        return _StringifierDict(
+            {**builtins.__dict__, **self.globals, **self.locals},
+            globals=self.globals,
+            owner=self._owner,
+            is_class=self._is_class,
+            format=Format.FORWARDREF,
+        )
+
+    def evaluate_ast(self, ast_obj, use_forwardref=False):
+        # make into an Expression
+        expr = ast.fix_missing_locations(ast.Expression(body=ast_obj))
+        code = compile(expr, "<annotate>", "eval")
+        return self.evaluate_code(code, use_forwardref=use_forwardref)
+
+    def evaluate_string(self, source, use_forwardref=False):
+        code = compile(source, "<annotate>", "eval")
+        return self.evaluate_code(code, use_forwardref=use_forwardref)
+
+    def evaluate_code(self, code, use_forwardref=False):
+        try:
+            return eval(code, globals=self.globals, locals=self.locals)
+        except Exception:
+            if not use_forwardref:
+                raise
+
+        new_locals = self._get_stringifier_locals()
+
+        result = eval(code, globals=self.globals, locals=new_locals)
+        new_locals.transmogrify(self._cell)
+        return result
 
 
 class ForwardRef:
@@ -100,40 +149,8 @@ class ForwardRef:
     def __init_subclass__(cls, /, *args, **kwds):
         raise TypeError("Cannot subclass ForwardRef")
 
-    def evaluate(
-        self,
-        *,
-        globals=None,
-        locals=None,
-        type_params=None,
-        owner=None,
-        format=Format.VALUE,
-    ):
-        """Evaluate the forward reference and return the value.
-
-        If the forward reference cannot be evaluated, raise an exception.
-        """
-        match format:
-            case Format.STRING:
-                return self.__forward_arg__
-            case Format.DEFERRED:
-                return self
-            case Format.AST:
-                if self.__ast_node__:
-                    return self.__ast_node__
-                else:
-                    return compile(self.__forward_arg__, "<annotate>", "eval", flags=ast.PyCF_ONLY_AST).body
-            case Format.VALUE:
-                is_forwardref_format = False
-            case Format.FORWARDREF:
-                is_forwardref_format = True
-            case _:
-                raise NotImplementedError(format)
-        if isinstance(self.__cell__, types.CellType):
-            try:
-                return self.__cell__.cell_contents
-            except ValueError:
-                pass
+    def get_evaluation_context(self, globals=None, locals=None, type_params=None, owner=None):
+        # Get the globals and locals contexts for reference evaluation
         if owner is None:
             owner = self.__owner__
 
@@ -196,6 +213,57 @@ class ForwardRef:
         if self.__extra_names__:
             locals.update(self.__extra_names__)
 
+        return EvaluationContext(
+            globals=globals,
+            locals=locals,
+            owner=owner,
+            is_class=self.__forward_is_class__,
+            cell=self.__cell__,
+        )
+
+    def evaluate(
+        self,
+        *,
+        globals=None,
+        locals=None,
+        type_params=None,
+        owner=None,
+        format=Format.VALUE,
+    ):
+        """Evaluate the forward reference and return the value.
+
+        If the forward reference cannot be evaluated, raise an exception.
+        """
+        match format:
+            case Format.STRING:
+                return self.__forward_arg__
+            case Format.DEFERRED:
+                return DeferredAnnotation(self)
+            case Format.VALUE:
+                is_forwardref_format = False
+            case Format.FORWARDREF:
+                is_forwardref_format = True
+            case _:
+                raise NotImplementedError(format)
+
+        if isinstance(self.__cell__, types.CellType):
+            try:
+                return self.__cell__.cell_contents
+            except ValueError:
+                pass
+
+        if owner is None:
+            owner = self.__owner__
+
+        context = self.get_evaluation_context(
+            globals=globals,
+            locals=locals,
+            type_params=type_params,
+            owner=owner,
+        )
+
+        globals, locals = context.globals, context.locals
+
         arg = self.__forward_arg__
         if arg.isidentifier() and not keyword.iskeyword(arg):
             if arg in locals:
@@ -211,27 +279,17 @@ class ForwardRef:
         else:
             code = self.__forward_code__
             try:
-                return eval(code, globals=globals, locals=locals)
+                result = context.evaluate_code(
+                    code,
+                    use_forwardref=is_forwardref_format
+                )
             except Exception:
-                if not is_forwardref_format:
+                if is_forwardref_format:
+                    return self
+                else:
                     raise
 
-            # All variables, in scoping order, should be checked before
-            # triggering __missing__ to create a _Stringifier.
-            new_locals = _StringifierDict(
-                {**builtins.__dict__, **globals, **locals},
-                globals=globals,
-                owner=owner,
-                is_class=self.__forward_is_class__,
-                format=format,
-            )
-            try:
-                result = eval(code, globals=globals, locals=new_locals)
-            except Exception:
-                return self
-            else:
-                new_locals.transmogrify(self.__cell__)
-                return result
+            return result
 
     def _evaluate(self, globalns, localns, type_params=_sentinel, *, recursive_guard):
         import typing
@@ -729,7 +787,7 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
         return annotate(format)
     except NotImplementedError:
         pass
-    if format in {Format.STRING, Format.AST, Format.DEFERRED}:
+    if format in {Format.STRING, Format.DEFERRED}:
         # STRING is implemented by calling the annotate function in a special
         # environment where every name lookup results in an instance of _Stringifier.
         # _Stringifier supports every dunder operation and returns a new _Stringifier.
@@ -747,10 +805,11 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
             # Both STRING and VALUE_WITH_FAKE_GLOBALS are not implemented: fallback to VALUE
             if format == Format.STRING:
                 return annotations_to_string(annotate(Format.VALUE))
-            elif format == Format.AST:
-                return annotations_to_ast(annotate(Format.VALUE))
             else:
-                return {k: DeferredReference(v) for k, v in annotate(Format.VALUE)}
+                return {
+                    k: DeferredAnnotation(v)
+                    for k, v in annotate(Format.VALUE)
+                }
         except Exception:
             pass
 
@@ -775,24 +834,30 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
                 key: _stringify_single(val)
                 for key, val in annos.items()
             }
-        elif format == Format.AST:
-            if _is_evaluate:
-                return _astify_single(annos)
-            return {
-                key: _astify_single(val)
-                for key, val in annos.items()
-            }
         else:
-            # Sketch behaviour for non-forwardref items such as constants
-            globals.transmogrify(cell_dict)
+            locals = {}
+            if isinstance(owner, type):
+                locals.update(vars(owner))
+
+            context = EvaluationContext(
+                globals=annotate.__globals__,
+                locals=locals,
+                owner=owner,
+                is_class=is_class,
+                cell=cell_dict,  # is this the empty one or is is usable?
+            )
+
             if _is_evaluate:
-                if isinstance(annos, ForwardRef):
-                    return annos
-                else:
-                    return ForwardRef(annos if isinstance(annos, str) else type_repr(annos))
+                return DeferredAnnotation(
+                    _stringify_single(annos),
+                    evaluation_context=context
+                )
             else:
                 return {
-                    key: val if isinstance(val, ForwardRef) else DeferredReference(val)
+                    key: DeferredAnnotation(
+                        _stringify_single(val),
+                        evaluation_context=context
+                    )
                     for key, val in annos.items()
                 }
 
@@ -929,21 +994,6 @@ def _stringify_single(anno):
         return repr(anno)
 
 
-def _astify_single(anno):
-    if anno is ...:
-        return ast.Constant(value=Ellipsis, kind=None)
-    elif isinstance(anno, str):
-        return _string_to_ast(anno)
-    elif isinstance(anno, _Template):
-        return _template_to_ast(anno)
-    elif isinstance(anno, _Stringifier):
-        # Stringifiers already have their AST
-        # Currently name mangled
-        return anno._Stringifier__get_ast()
-    else:
-        return _string_to_ast(type_repr(anno))
-
-
 def get_annotate_from_class_namespace(obj):
     """Retrieve the annotate function from a class namespace dictionary.
 
@@ -1046,20 +1096,13 @@ def get_annotations(
             ann = _get_dunder_annotations(obj)
             if ann is not None:
                 return annotations_to_string(ann)
-        case Format.AST:
-            ann = _get_and_call_annotate(obj, format)
-            if ann is not None:
-                return dict(ann)
-            ann = _get_dunder_annotations(obj)
-            if ann is not None:
-                return annotations_to_ast(ann)
         case Format.DEFERRED:
             ann = _get_and_call_annotate(obj, format)
             if ann is not None:
                 return dict(ann)
             ann = _get_dunder_annotations(obj)
             if ann is not None:
-                return {k: DeferredReference(v) for k, v in ann.items()}
+                return {k: DeferredAnnotation(v) for k, v in ann.items()}
         case Format.VALUE_WITH_FAKE_GLOBALS:
             raise ValueError("The VALUE_WITH_FAKE_GLOBALS format is for internal use only")
         case _:
@@ -1155,13 +1198,6 @@ def type_repr(value):
         return "..."
     return repr(value)
 
-def _string_to_ast(annotation_string):
-    return compile(
-        annotation_string,
-        "<string>",
-        "eval",
-        flags=ast.PyCF_ONLY_AST
-    ).body
 
 def annotations_to_string(annotations):
     """Convert an annotation dict containing values to approximately the STRING format.
@@ -1173,11 +1209,6 @@ def annotations_to_string(annotations):
         for n, t in annotations.items()
     }
 
-def annotations_to_ast(annotations):
-    return {
-        n: _string_to_ast(t if isinstance(t, str) else type_repr(t))
-        for n, t in annotations.items()
-    }
 
 def _rewrite_star_unpack(arg):
     """If the given argument annotation expression is a star unpack e.g. `'*Ts'`
@@ -1230,37 +1261,67 @@ def _get_dunder_annotations(obj):
     return ann
 
 
-class DeferredReference:
+class DeferredAnnotation:
     """
     This exists to handle evaluating objects that have already been evaluated
     in the required formats.
     """
-    __slots__ = ("obj", "as_str")
-    def __init__(self, obj, as_str=None):
+    __slots__ = ("obj", "_as_str", "_evaluation_context")
+    def __init__(self, obj, *, evaluation_context=None, as_str=None):
         self.obj = obj
-        if as_str is not None:
-            self.as_str = as_str
-        elif isinstance(obj, str):
-            self.as_str = obj
-        else:
-            self.as_str = type_repr(obj)
+        self._evaluation_context = evaluation_context
+        self._as_str = as_str
 
     def __repr__(self):
-        if self.as_str == self.obj or self.as_str == type_repr(self.obj):
-            return f"{self.__class__.__name__}({self.obj!r})"
+        if isinstance(self.obj, ForwardRef):
+            obj_repr = f"{self.obj.__forward_arg__!r}"
         else:
-            return f"{self.__class__.__name__}({self.obj!r}, as_str={self.as_str!r})"
+            obj_repr = f"{self.obj!r}"
+
+        return f"{self.__class__.__name__}({obj_repr})"
+
+    @property
+    def as_str(self):
+        if self._as_str is None:
+            if isinstance(self.obj, str):
+                self._as_str = self.obj
+            elif isinstance(self.obj, ForwardRef):
+                self._as_str = self.obj.__forward_arg__
+            else:
+                self._as_str = type_repr(self.obj)
+        return self._as_str
+
+    @property
+    def as_ast(self):
+        if isinstance(self.obj, ForwardRef) and self.obj.__ast_node__:
+            return self.obj.__ast_node__
+        return compile(self.as_str, "<annotate>", "eval", flags=ast.PyCF_ONLY_AST).body
+
+    @property
+    def evaluation_context(self):
+        if self._evaluation_context is None:
+            if isinstance(self.obj, ForwardRef):
+                self._evaluation_context = self.obj.get_evaluation_context()
+        return self._evaluation_context
+
+    @property
+    def wraps_forwardref(self):
+        return isinstance(self.obj, ForwardRef)
 
     def evaluate(self, format=Format.VALUE):
         match format:
             case Format.DEFERRED:
                 return self
             case Format.VALUE | Format.FORWARDREF:
-                return self.obj
+                if isinstance(self.obj, ForwardRef):
+                    return self.obj.evaluate(format=format)
+                elif isinstance(self.obj, str) and (context := self.evaluation_context):
+                    use_forwardref = (format == Format.FORWARDREF)
+                    return context.evaluate_string(self.obj, use_forwardref)
+                else:
+                    return self.obj
             case Format.STRING:
                 return self.as_str
-            case Format.AST:
-                return compile(self.as_str, "<annotate>", "eval", flags=ast.PyCF_ONLY_AST).body
             case _:
                 raise NotImplementedError(format)
 
@@ -1268,16 +1329,17 @@ class DeferredReference:
 def make_annotate_function(annos):
     """Create a new __annotate__ function from deferred annotations"""
     forward_annos = {
-        k: v if isinstance(v, (ForwardRef, DeferredReference)) else DeferredReference(v)
+        k: v if isinstance(v, DeferredAnnotation) else DeferredAnnotation(v)
         for k, v in annos.items()
     }
 
     def __annotate__(format, /):
         match format:
-            case Format.VALUE | Format.FORWARDREF | Format.STRING | Format.AST:
+            case Format.VALUE | Format.FORWARDREF | Format.STRING:
                 return {k: v.evaluate(format=format) for k, v in forward_annos.items()}
             case Format.DEFERRED:
-                return forward_annos
+                return dict(forward_annos)
             case _:
                 raise NotImplementedError(format)
+
     return __annotate__
