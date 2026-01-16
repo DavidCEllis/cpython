@@ -1326,6 +1326,10 @@ class DeferredAnnotation:
 
         return type(self)(obj, evaluation_context=evaluation_context)
 
+    def transform(self, transformer):
+        new_ast = transformer.visit(self.as_ast)
+        return self.__replace__(obj=new_ast)
+
     @property
     def as_str(self):
         if self._as_str is None:
