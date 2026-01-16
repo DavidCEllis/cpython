@@ -60,12 +60,21 @@ class EvaluationContext:
         "_cell",
     )
     def __init__(self, *, globals, locals, owner, is_class, cell):
+        # TODO: I think this may need to be deferred in case vars(owner) changes
+        # When adding tests, try to make this fail
+        if locals is None:
+            locals = {}
+            if isinstance(owner, type):
+                locals.update(vars(owner))
+
         self.globals = globals
         self.locals = locals
         self._owner = owner
         self._is_class = is_class
         self._cell = cell
 
+    # TODO: Combine all of these into one evaluate function?
+    # Might need a different name or people may expect it to accept `FORMAT`
     def evaluate_ast(self, ast_obj, use_forwardref=False, extra_names=None):
         # make into an Expression
         expr = ast.fix_missing_locations(ast.Expression(body=ast_obj))
@@ -178,6 +187,9 @@ class ForwardRef:
         if type_params is None and owner is not None:
             type_params = getattr(owner, "__type_params__", None)
 
+        # TODO: Move some of the locals logic into EvaluationContext
+        # This will probably need to be deferred to allow locals to
+        # continue to update.
         if locals is None:
             locals = {}
             if isinstance(owner, type):
@@ -834,13 +846,9 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
                 for key, val in annos.items()
             }
         else:
-            locals = {}
-            if isinstance(owner, type):
-                locals.update(vars(owner))
-
             context = EvaluationContext(
                 globals=annotate.__globals__,
-                locals=locals,
+                locals=None,
                 owner=owner,
                 is_class=is_class,
                 cell=cell_dict,  # is this the empty one or is is usable?
@@ -1264,20 +1272,38 @@ class DeferredAnnotation:
     """
     This exists to handle evaluating objects that have already been evaluated
     in the required formats.
+
+    'obj' can be any object
+
+    Internally if obj is a string or an AST object and an evaluation context
+    is provided, the context can be used to evaluate the annotation later.
+
+    If obj is a ForwardRef, the evaluation context can be retrieved from the reference
+    and does not need to be provided separately.
+
+    Otherwise the object is treated as having already been evaluated, trying to
+    evaluate as VALUE or FORWARDREF will return the original object, STRING will
+    return type_repr of the object.
     """
-    __slots__ = ("obj", "_as_str", "_evaluation_context")
-    def __init__(self, obj, *, evaluation_context=None, as_str=None):
+    __slots__ = ("obj", "_evaluation_context", "_as_str")
+
+    def __init_subclass__(cls, /, *args, **kwds):
+        raise TypeError("Cannot subclass DeferredAnnotation")
+
+    def __init__(self, obj, *, evaluation_context=None):
         self.obj = obj
         self._evaluation_context = evaluation_context
-        self._as_str = as_str
+
+        self._as_str = None
 
     def __repr__(self):
-        if isinstance(self.obj, ForwardRef):
-            obj_repr = f"{self.obj.__forward_arg__!r}"
-        else:
-            obj_repr = f"{self.obj!r}"
+        return f"{self.__class__.__name__}({self.as_str!r})"
 
-        return f"{self.__class__.__name__}({obj_repr})"
+    def __replace__(self, **changes):
+        obj = changes.pop("obj", self.obj)
+        evaluation_context = changes.pop("evaluation_context", self.evaluation_context)
+
+        return type(self)(obj, evaluation_context=evaluation_context)
 
     @property
     def as_str(self):
@@ -1286,12 +1312,16 @@ class DeferredAnnotation:
                 self._as_str = self.obj
             elif isinstance(self.obj, ForwardRef):
                 self._as_str = self.obj.__forward_arg__
+            elif isinstance(self.obj, ast.AST):
+                self._as_str = ast.unparse(self.obj)
             else:
                 self._as_str = type_repr(self.obj)
         return self._as_str
 
     @property
     def as_ast(self):
+        if isinstance(self.obj, ast.AST):
+            return self.obj
         if isinstance(self.obj, ForwardRef) and self.obj.__ast_node__:
             return self.obj.__ast_node__
         return compile(self.as_str, "<annotate>", "eval", flags=ast.PyCF_ONLY_AST).body
@@ -1301,11 +1331,8 @@ class DeferredAnnotation:
         if self._evaluation_context is None:
             if isinstance(self.obj, ForwardRef):
                 self._evaluation_context = self.obj.get_evaluation_context()
-        return self._evaluation_context
 
-    @property
-    def wraps_forwardref(self):
-        return isinstance(self.obj, ForwardRef)
+        return self._evaluation_context
 
     def evaluate(self, format=Format.VALUE):
         match format:
@@ -1314,11 +1341,17 @@ class DeferredAnnotation:
             case Format.VALUE | Format.FORWARDREF:
                 if isinstance(self.obj, ForwardRef):
                     return self.obj.evaluate(format=format)
-                elif isinstance(self.obj, str) and (context := self.evaluation_context):
+                elif context := self.evaluation_context:
                     use_forwardref = (format == Format.FORWARDREF)
-                    return context.evaluate_string(self.obj, use_forwardref)
-                else:
-                    return self.obj
+                    if isinstance(self.obj, str):
+                        return context.evaluate_string(self.obj, use_forwardref)
+                    elif isinstance(self.obj, ast.AST):
+                        return context.evaluate_ast(self.obj, use_forwardref)
+                elif isinstance(self.obj, ast.AST):
+                    # AST object with no evaluation context - return as string
+                    return self.as_str
+
+                return self.obj
             case Format.STRING:
                 return self.as_str
             case _:
