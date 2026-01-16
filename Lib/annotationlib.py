@@ -57,16 +57,16 @@ class EvaluationContext:
         "_locals",
         "_owner",
         "_is_class",
-        "_cell",
+        "_cells",
     )
-    def __init__(self, *, globals, locals, owner, is_class, cell):
+    def __init__(self, *, globals, locals, owner, is_class, cells):
         # TODO: I think this may need to be deferred in case vars(owner) changes
         # When adding tests, try to make this fail
         self.globals = globals
         self._locals = locals
         self._owner = owner
         self._is_class = is_class
-        self._cell = cell
+        self._cells = cells
 
     @property
     def locals(self):
@@ -74,8 +74,18 @@ class EvaluationContext:
             locals = {}
             if isinstance(self._owner, type):
                 locals.update(vars(self._owner))
-            return locals
-        return self._locals
+        else:
+            locals = dict(self._locals)
+        # Add cell contents
+        for cell_name, cell in self._cells.items():
+            try:
+                cell_value = cell.cell_contents
+            except ValueError:
+                pass
+            else:
+                locals.setdefault(cell_name, cell_value)
+        return locals
+
 
     # TODO: Combine all of these into one evaluate function?
     # Might need a different name or people may expect it to accept `FORMAT`
@@ -109,7 +119,7 @@ class EvaluationContext:
         )
 
         result = eval(code, globals=self.globals, locals=new_locals)
-        new_locals.transmogrify(self._cell)
+        new_locals.transmogrify(self._cells)
         return result
 
 
@@ -228,12 +238,19 @@ class ForwardRef:
         if self.__extra_names__:
             locals.update(self.__extra_names__)
 
+        # Convert a single `cell` into a dict
+        # The context may evaluate additional names
+        if isinstance(self.__cell__, types.CellType):
+            cells = {self.__forward_arg__: self.__cell__}
+        else:
+            cells = self.__cell__
+
         return EvaluationContext(
             globals=globals,
             locals=locals,
             owner=owner,
             is_class=self.__forward_is_class__,
-            cell=self.__cell__,
+            cells=cells,
         )
 
     def evaluate(
@@ -855,7 +872,7 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
                 locals=None,
                 owner=owner,
                 is_class=is_class,
-                cell=cell_dict,  # is this the empty one or is is usable?
+                cells=cell_dict,
             )
 
             if _is_evaluate:
