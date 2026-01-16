@@ -59,7 +59,7 @@ class EvaluationContext:
         "_is_class",
         "_cells",
     )
-    def __init__(self, *, globals, locals, owner, is_class, cells):
+    def __init__(self, *, globals, locals, owner, is_class, cells=None):
         # TODO: I think this may need to be deferred in case vars(owner) changes
         # When adding tests, try to make this fail
         self.globals = globals
@@ -77,13 +77,14 @@ class EvaluationContext:
         else:
             locals = dict(self._locals)
         # Add cell contents
-        for cell_name, cell in self._cells.items():
-            try:
-                cell_value = cell.cell_contents
-            except ValueError:
-                pass
-            else:
-                locals.setdefault(cell_name, cell_value)
+        if isinstance(self._cells, dict):
+            for cell_name, cell in self._cells.items():
+                try:
+                    cell_value = cell.cell_contents
+                except ValueError:
+                    pass
+                else:
+                    locals.setdefault(cell_name, cell_value)
         return locals
 
 
