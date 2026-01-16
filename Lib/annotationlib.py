@@ -1359,19 +1359,32 @@ class DeferredAnnotation:
 
         return self._evaluation_context
 
-    def evaluate(self, format=Format.VALUE):
+    def evaluate(self, format=Format.VALUE, extra_names=None):
         match format:
             case Format.DEFERRED:
                 return self
             case Format.VALUE | Format.FORWARDREF:
+                use_forwardref = (format == Format.FORWARDREF)
                 if isinstance(self.obj, ForwardRef):
-                    return self.obj.evaluate(format=format)
+                    context = self.obj.get_evaluation_context()
+                    return context.evaluate_code(
+                        self.obj.__forward_code__,
+                        use_forwardref,
+                        extra_names,
+                    )
                 elif context := self.evaluation_context:
-                    use_forwardref = (format == Format.FORWARDREF)
                     if isinstance(self.obj, str):
-                        return context.evaluate_string(self.obj, use_forwardref)
+                        return context.evaluate_string(
+                            self.obj,
+                            use_forwardref,
+                            extra_names
+                        )
                     elif isinstance(self.obj, ast.AST):
-                        return context.evaluate_ast(self.obj, use_forwardref)
+                        return context.evaluate_ast(
+                            self.obj,
+                            use_forwardref,
+                            extra_names
+                        )
                 elif isinstance(self.obj, ast.AST):
                     # AST object with no evaluation context - return as string
                     return self.as_str
