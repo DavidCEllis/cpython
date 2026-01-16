@@ -87,7 +87,6 @@ class EvaluationContext:
                     locals.setdefault(cell_name, cell_value)
         return locals
 
-
     # TODO: Combine all of these into one evaluate function?
     # Might need a different name or people may expect it to accept `FORMAT`
     def evaluate_ast(self, ast_obj, use_forwardref=False, extra_names=None):
