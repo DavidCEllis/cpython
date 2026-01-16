@@ -59,7 +59,7 @@ class EvaluationContext:
         "_is_class",
         "_cells",
     )
-    def __init__(self, *, globals, locals, owner, is_class, cells=None):
+    def __init__(self, *, globals, locals, owner=None, is_class=False, cells=None):
         # TODO: I think this may need to be deferred in case vars(owner) changes
         # When adding tests, try to make this fail
         self.globals = globals
