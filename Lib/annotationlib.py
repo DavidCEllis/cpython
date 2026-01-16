@@ -54,7 +54,7 @@ _SLOTS = (
 class EvaluationContext:
     __slots__ = (
         "globals",
-        "locals",
+        "_locals",
         "_owner",
         "_is_class",
         "_cell",
@@ -62,16 +62,20 @@ class EvaluationContext:
     def __init__(self, *, globals, locals, owner, is_class, cell):
         # TODO: I think this may need to be deferred in case vars(owner) changes
         # When adding tests, try to make this fail
-        if locals is None:
-            locals = {}
-            if isinstance(owner, type):
-                locals.update(vars(owner))
-
         self.globals = globals
-        self.locals = locals
+        self._locals = locals
         self._owner = owner
         self._is_class = is_class
         self._cell = cell
+
+    @property
+    def locals(self):
+        if self._locals is None:
+            locals = {}
+            if isinstance(self._owner, type):
+                locals.update(vars(self._owner))
+            return locals
+        return self._locals
 
     # TODO: Combine all of these into one evaluate function?
     # Might need a different name or people may expect it to accept `FORMAT`
