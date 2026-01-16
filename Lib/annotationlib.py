@@ -840,7 +840,7 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
             else:
                 return {
                     k: DeferredAnnotation(v)
-                    for k, v in annotate(Format.VALUE)
+                    for k, v in annotate(Format.VALUE).items()
                 }
         except Exception:
             pass
