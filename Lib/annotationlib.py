@@ -8,12 +8,15 @@ import sys
 import types
 
 __all__ = [
+    "DeferredAnnotation",
+    "EvaluationContext",
     "Format",
     "ForwardRef",
     "call_annotate_function",
     "call_evaluate_function",
     "get_annotate_from_class_namespace",
     "get_annotations",
+    "make_annotate_function",
     "annotations_to_string",
     "type_repr",
 ]
@@ -87,19 +90,20 @@ class EvaluationContext:
                     locals.setdefault(cell_name, cell_value)
         return locals
 
-    # TODO: Combine all of these into one evaluate function?
-    # Might need a different name or people may expect it to accept `FORMAT`
-    def evaluate_ast(self, ast_obj, use_forwardref=False, extra_names=None):
-        # make into an Expression
-        expr = ast.fix_missing_locations(ast.Expression(body=ast_obj))
-        code = compile(expr, "<annotate>", "eval")
-        return self.evaluate_code(code, use_forwardref=use_forwardref, extra_names=extra_names)
+    # TODO: Different name so people don't expect a `Format` option?
+    def evaluate(self, obj, use_forwardref=False, extra_names=None):
+        if isinstance(obj, ast.AST):
+            expr = ast.fix_missing_locations(ast.Expression(body=obj))
+            code = compile(expr, "<annotate>", "eval")
+        elif isinstance(obj, str):
+            code = compile(obj, "<annotate>", "eval")
+        elif isinstance(obj, types.CodeType):
+            code = obj
+        elif isinstance(obj, ForwardRef):
+            code = obj.__forward_code__
+        else:
+            raise TypeError("'obj' must be a string, ast expression, ForwardRef or code object")
 
-    def evaluate_string(self, source, use_forwardref=False, extra_names=None):
-        code = compile(source, "<annotate>", "eval")
-        return self.evaluate_code(code, use_forwardref=use_forwardref, extra_names=extra_names)
-
-    def evaluate_code(self, code, use_forwardref=False, extra_names=None):
         locals = dict(self.locals)
         if extra_names is not None:
             locals.update(extra_names)
@@ -121,6 +125,11 @@ class EvaluationContext:
         result = eval(code, globals=self.globals, locals=new_locals)
         new_locals.transmogrify(self._cells)
         return result
+
+    # Temporary aliases to not break earlier examples
+    evaluate_ast = evaluate
+    evaluate_string = evaluate
+    evaluate_code = evaluate
 
 
 class ForwardRef:
@@ -1356,26 +1365,31 @@ class DeferredAnnotation:
                 return self
             case Format.VALUE | Format.FORWARDREF:
                 use_forwardref = (format == Format.FORWARDREF)
-                if isinstance(self.obj, ForwardRef):
-                    context = self.obj.get_evaluation_context()
-                    return context.evaluate_code(
-                        self.obj.__forward_code__,
-                        use_forwardref,
-                        extra_names,
-                    )
-                elif context := self.evaluation_context:
-                    if isinstance(self.obj, str):
-                        return context.evaluate_string(
+
+                if (
+                    (context := self.evaluation_context)
+                    and (isinstance(self.obj, (str, ast.AST, ForwardRef)))
+                ):
+                    try:
+                        return context.evaluate(
                             self.obj,
                             use_forwardref,
-                            extra_names
+                            extra_names,
                         )
-                    elif isinstance(self.obj, ast.AST):
-                        return context.evaluate_ast(
-                            self.obj,
-                            use_forwardref,
-                            extra_names
-                        )
+                    except Exception:
+                        if use_forwardref:
+                            # Try to construct a forwardref
+                            ref = ForwardRef(
+                                self.as_str,
+                                owner=context._owner,
+                                is_class=context._is_class,
+                            )
+                            # Patch in cell/globals
+                            ref.__globals__ = context.globals
+                            ref.__cell__ = context._cells
+
+                            return ref
+                        raise
                 elif isinstance(self.obj, ast.AST):
                     # AST object with no evaluation context - return as string
                     return self.as_str
