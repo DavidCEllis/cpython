@@ -318,10 +318,9 @@ class ForwardRef:
             else:
                 raise NameError(_NAME_ERROR_MSG.format(name=arg), name=arg)
         else:
-            code = self.__forward_code__
             try:
-                result = context.evaluate_code(
-                    code,
+                result = context.evaluate(
+                    self,
                     use_forwardref=is_forwardref_format
                 )
             except Exception:
