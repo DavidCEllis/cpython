@@ -61,8 +61,9 @@ class EvaluationContext:
         "_owner",
         "_is_class",
         "_cells",
+        "_type_params",
     )
-    def __init__(self, *, globals, locals=None, owner=None, is_class=False, cells=None):
+    def __init__(self, *, globals, locals=None, owner=None, is_class=False, cells=None, type_params=None):
         # TODO: I think this may need to be deferred in case vars(owner) changes
         # When adding tests, try to make this fail
         self.globals = globals
@@ -70,6 +71,7 @@ class EvaluationContext:
         self._owner = owner
         self._is_class = is_class
         self._cells = cells
+        self._type_params = type_params
 
     @property
     def locals(self):
@@ -79,6 +81,20 @@ class EvaluationContext:
                 locals.update(vars(self._owner))
         else:
             locals = dict(self._locals)
+
+        # Handle type params
+        if self._type_params is None and self._owner is not None:
+            type_params = getattr(self._owner, "__type_params__", None)
+        else:
+            type_params = self._type_params
+
+        # "Inject" type parameters into the local namespace
+        # (unless they are shadowed by assignments *in* the local namespace),
+        # as a way of emulating annotation scopes when calling `eval()`
+        if type_params is not None:
+            for param in type_params:
+                locals.setdefault(param.__name__, param)
+
         # Add cell contents
         if isinstance(self._cells, dict):
             for cell_name, cell in self._cells.items():
@@ -207,46 +223,6 @@ class ForwardRef:
         if globals is None:
             globals = {}
 
-        if type_params is None and owner is not None:
-            type_params = getattr(owner, "__type_params__", None)
-
-        # TODO: Move some of the locals logic into EvaluationContext
-        # This will probably need to be deferred to allow locals to
-        # continue to update.
-        if locals is None:
-            locals = {}
-            if isinstance(owner, type):
-                locals.update(vars(owner))
-        elif (
-            type_params is not None
-            or isinstance(self.__cell__, dict)
-            or self.__extra_names__
-        ):
-            # Create a new locals dict if necessary,
-            # to avoid mutating the argument.
-            locals = dict(locals)
-
-        # "Inject" type parameters into the local namespace
-        # (unless they are shadowed by assignments *in* the local namespace),
-        # as a way of emulating annotation scopes when calling `eval()`
-        if type_params is not None:
-            for param in type_params:
-                locals.setdefault(param.__name__, param)
-
-        # Similar logic can be used for nonlocals, which should not
-        # override locals.
-        if isinstance(self.__cell__, dict):
-            for cell_name, cell in self.__cell__.items():
-                try:
-                    cell_value = cell.cell_contents
-                except ValueError:
-                    pass
-                else:
-                    locals.setdefault(cell_name, cell_value)
-
-        if self.__extra_names__:
-            locals.update(self.__extra_names__)
-
         # Convert a single `cell` into a dict
         # The context may evaluate additional names
         if isinstance(self.__cell__, types.CellType):
@@ -260,6 +236,7 @@ class ForwardRef:
             owner=owner,
             is_class=self.__forward_is_class__,
             cells=cells,
+            type_params=type_params,
         )
 
     def evaluate(
@@ -321,7 +298,8 @@ class ForwardRef:
             try:
                 result = context.evaluate(
                     self,
-                    use_forwardref=is_forwardref_format
+                    use_forwardref=is_forwardref_format,
+                    extra_names=self.__extra_names__,
                 )
             except Exception:
                 if is_forwardref_format:
