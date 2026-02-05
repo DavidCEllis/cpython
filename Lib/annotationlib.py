@@ -80,6 +80,18 @@ class EvaluationContext:
         self._cells = cells
         self._type_params = type_params
 
+    def _compare_cells(self, other):
+        # Needed for `__eq__`
+        if self._cells is other._cells:
+            return True
+        elif self._cells is None or other._cells is None:
+            return False
+
+        return (
+            self._cells.keys() == other._cells.keys()
+            and all(self._cells[k] is other._cells[k] for k in self._cells)
+        )
+
     def __eq__(self, other):
         if not isinstance(other, EvaluationContext):
             return NotImplemented
@@ -92,10 +104,7 @@ class EvaluationContext:
             and self._owner is other._owner
             and self._is_class == other._is_class
             and self._type_params is other._type_params
-
-            # For cells, the dictionaries may not be the same object, check all cells match
-            and self._cells.keys() == other._cells.keys()
-            and all(self._cells[k] is other._cells[k] for k in self._cells)
+            and self._compare_cells(other)
         )
 
     @property
