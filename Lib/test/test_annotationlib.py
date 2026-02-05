@@ -2245,6 +2245,169 @@ class TestForwardRefClass(unittest.TestCase):
                 pass
 
 
+class TestDeferredFormat(unittest.TestCase):
+    def test_no_subclass(self):
+        with self.assertRaises(TypeError):
+            class DeferredAnnotationSubclass(DeferredAnnotation):
+                pass
+
+    def test_create_from_type(self):
+        # Create a DeferredAnnotation from already evaluated types
+        deferred_str = DeferredAnnotation(str)
+
+        self.assertEqual(deferred_str.evaluate(format=Format.VALUE), str)
+        self.assertEqual(deferred_str.evaluate(format=Format.FORWARDREF), str)
+        self.assertEqual(deferred_str.evaluate(format=Format.STRING), "str")
+
+        self.assertIs(deferred_str.evaluate(format=Format.DEFERRED), deferred_str)
+
+        container = dict[str, list[int]]
+        deferred_container = DeferredAnnotation(container)
+
+        self.assertEqual(deferred_container.evaluate(format=Format.VALUE), container)
+        self.assertEqual(deferred_container.evaluate(format=Format.FORWARDREF), container)
+        self.assertEqual(deferred_container.evaluate(format=Format.STRING), "dict[str, list[int]]")
+
+        self.assertIs(deferred_container.evaluate(format=Format.DEFERRED), deferred_container)
+
+    def test_create_from_string(self):
+        # Create a DeferredAnnotation from string annotations
+        # The 'STRING' format must not be double quoted
+
+        deferred_str = DeferredAnnotation("str")
+
+        self.assertEqual(deferred_str.evaluate(format=Format.VALUE), "str")
+        self.assertEqual(deferred_str.evaluate(format=Format.FORWARDREF), "str")
+        self.assertEqual(deferred_str.evaluate(format=Format.STRING), "str")
+
+        self.assertIs(deferred_str.evaluate(format=Format.DEFERRED), deferred_str)
+
+        container = "dict[str, list[int]]"
+        deferred_container = DeferredAnnotation(container)
+
+        self.assertEqual(deferred_container.evaluate(format=Format.VALUE), container)
+        self.assertEqual(deferred_container.evaluate(format=Format.FORWARDREF), container)
+        self.assertEqual(deferred_container.evaluate(format=Format.STRING), container)
+
+        self.assertIs(deferred_container.evaluate(format=Format.DEFERRED), deferred_container)
+
+    def test_create_from_forwardref(self):
+        # Create a DeferredAnnotation from an undefined ForwardRef
+        class Example:
+            a: undefined
+
+        ref = get_annotations(Example, format=Format.FORWARDREF)['a']
+
+        deferred_ref = DeferredAnnotation(ref)
+
+        with self.assertRaises(NameError):
+            deferred_ref.evaluate(format=Format.VALUE)
+
+        new_ref = deferred_ref.evaluate(format=Format.FORWARDREF)
+
+        # If there are cell variables, deferred *always* makes dictionaries
+        # Which would cause the ForwardRef to not be equal
+        new_ref.__cell__ = new_ref.__cell__["undefined"]
+        self.assertEqual(new_ref, ref)
+
+        self.assertEqual(
+            deferred_ref.evaluate(format=Format.STRING),
+            "undefined",
+        )
+
+        # Check the evaluation works once a value is defined
+        undefined = str
+        self.assertEqual(
+            deferred_ref.evaluate(),
+            str,
+        )
+
+    def test_does_not_support_valuewithfakeglobals(self):
+        anno = DeferredAnnotation(str)
+
+        with self.assertRaises(NotImplementedError):
+            anno.evaluate(format=Format.VALUE_WITH_FAKE_GLOBALS)
+
+    def test_eq(self):
+        # Basic
+        anno = DeferredAnnotation(str)
+        eq_anno = DeferredAnnotation(str)
+
+        self.assertEqual(anno, eq_anno)
+
+        # From Annotations
+        def f(x: str, y: undefined): ...
+
+        annos = get_annotations(f, format=Format.DEFERRED)
+        eq_annos = get_annotations(f, format=Format.DEFERRED)
+
+        self.assertEqual(annos, eq_annos)
+
+        self.assertNotEqual(annos['x'], str)
+
+    def test_repr(self):
+        attrib_anno = DeferredAnnotation(str)
+        string_anno = DeferredAnnotation("str")
+        ref_anno = DeferredAnnotation(ForwardRef("str"))
+
+        self.assertEqual(repr(attrib_anno), repr(string_anno))
+        self.assertEqual(repr(attrib_anno), repr(ref_anno))
+
+    def test_evaluate_attribute_error(self):
+        # test evaluating an annotation that would raise
+        # an AttributeError
+        m = object()
+        class Example:
+            a: m.undefined
+
+        annos = get_annotations(Example, format=Format.DEFERRED)
+
+        with self.assertRaises(AttributeError):
+            annos['a'].evaluate(format=Format.VALUE)
+
+        a_ref = annos['a'].evaluate(format=Format.FORWARDREF)
+
+        self.assertIsInstance(a_ref, ForwardRef)
+
+        # Remake from a forwardref and check again
+        a_deferred = DeferredAnnotation(a_ref)
+
+        a_fr = a_deferred.evaluate(format=Format.FORWARDREF)
+
+        self.assertIsInstance(a_fr, ForwardRef)
+
+    def test_evaluates_to_value(self):
+        # Test that deferred annotations evaluate to the same
+        # as value annotations, even when a value changes
+
+        # Note that we have to use `call_annotate_function`
+        # as otherwise `__annotations__` are cached and don't update
+
+        variable = int
+
+        class Example:
+            a: str
+            b: list[int | float]
+            c: variable
+
+        value_annos = annotationlib.call_annotate_function(Example.__annotate__, format=Format.VALUE)
+        deferred_annos = get_annotations(Example, format=Format.DEFERRED)
+
+        self.assertEqual(
+            value_annos,
+            {k: v.evaluate() for k, v in deferred_annos.items()}
+        )
+
+        variable = str
+
+        value_annos = annotationlib.call_annotate_function(Example.__annotate__, format=Format.VALUE)
+
+        self.assertEqual(
+            value_annos,
+            {k: v.evaluate() for k, v in deferred_annos.items()}
+        )
+
+
 class TestAnnotationLib(unittest.TestCase):
     def test__all__(self):
         support.check__all__(self, annotationlib)
