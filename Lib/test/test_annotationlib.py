@@ -16,8 +16,9 @@ from annotationlib import (
     DeferredAnnotation,
     Format,
     ForwardRef,
-    get_annotations,
     annotations_to_string,
+    get_annotations,
+    make_annotate_function,
     type_repr,
 )
 from typing import Unpack, get_type_hints, List, Union
@@ -2345,6 +2346,15 @@ class TestDeferredFormat(unittest.TestCase):
 
         self.assertNotEqual(annos['x'], str)
 
+    def test_ast_eq(self):
+        # Test the eq method when deferred annotations use AST objects internally
+        def f(a: dict[str, int]): ...
+
+        annos = get_annotations(f, format=Format.DEFERRED)
+        anno_rep = get_annotations(f, format=Format.DEFERRED)
+
+        self.assertEqual(annos['a'], anno_rep['a'])
+
     def test_repr(self):
         attrib_anno = DeferredAnnotation(str)
         string_anno = DeferredAnnotation("str")
@@ -2406,6 +2416,79 @@ class TestDeferredFormat(unittest.TestCase):
             value_annos,
             {k: v.evaluate() for k, v in deferred_annos.items()}
         )
+
+    def test_always_deferred(self):
+        # Check some types that had 'escaped' deferral initially
+        class Example:
+            a: str
+            b: "int"
+            c: [str, int]
+            d: {list: float}
+            e: (str, int)
+            f: typing.attribute_error
+
+        annos = get_annotations(Example, format=Format.DEFERRED)
+
+        for anno in annos.values():
+            self.assertIsInstance(anno, DeferredAnnotation)
+
+
+class TestMakeAnnotateFunction(unittest.TestCase):
+    def test_remade_annotation(self):
+        def f(a: int) -> str: ...
+
+        def_annos = get_annotations(f, format=Format.DEFERRED)
+        new_annotate = make_annotate_function(def_annos)
+
+        for fmt in Format:
+            if fmt == Format.VALUE_WITH_FAKE_GLOBALS:
+                continue
+            with self.subTest(format=fmt):
+                self.assertEqual(
+                    get_annotations(f, format=fmt),
+                    annotationlib.call_annotate_function(new_annotate, format=fmt)
+                )
+
+    def test_forwardref_annotation(self):
+        # Check forwardrefs resolve if they are defined *after* deferred
+        # annotations are collected.
+        def f(a: undefined): ...
+
+        def_annos = get_annotations(f, format=Format.DEFERRED)
+        new_annotate = make_annotate_function(def_annos)
+
+        for fmt in Format:
+            if fmt in {Format.VALUE, Format.VALUE_WITH_FAKE_GLOBALS}:
+                continue
+            with self.subTest(format=fmt):
+                direct_annos = get_annotations(f, format=fmt)
+                remade_annos = annotationlib.call_annotate_function(new_annotate, format=fmt)
+
+                if fmt == Format.FORWARDREF:
+                    # cell adjustment
+                    remade_annos['a'].__cell__ = remade_annos['a'].__cell__['undefined']
+
+                self.assertEqual(direct_annos, remade_annos)
+
+        undefined = str
+
+        for fmt in Format:
+            if fmt == Format.VALUE_WITH_FAKE_GLOBALS:
+                continue
+            with self.subTest(format=f"Retest {fmt}"):
+                self.assertEqual(
+                    get_annotations(f, format=fmt),
+                    annotationlib.call_annotate_function(new_annotate, format=fmt)
+                )
+
+    def test_fakeglobals_raises(self):
+        def f(a: int) -> str: ...
+
+        def_annos = get_annotations(f, format=Format.DEFERRED)
+        new_annotate = make_annotate_function(def_annos)
+
+        with self.assertRaises(NotImplementedError):
+            new_annotate(Format.VALUE_WITH_FAKE_GLOBALS)
 
 
 class TestAnnotationLib(unittest.TestCase):
