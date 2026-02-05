@@ -1336,12 +1336,6 @@ class DeferredAnnotation:
     def __repr__(self):
         return f"{self.__class__.__name__}({self.as_str!r})"
 
-    def __replace__(self, **changes):
-        obj = changes.pop("obj", self.obj)
-        evaluation_context = changes.pop("evaluation_context", self.evaluation_context)
-
-        return type(self)(obj, evaluation_context=evaluation_context)
-
     @property
     def as_str(self):
         if self._as_str is None:
@@ -1370,6 +1364,11 @@ class DeferredAnnotation:
     #     new_ast = transformer.visit(self.as_ast)
     #     return self.__replace__(obj=new_ast)
 
+    # def __replace__(self, **changes):
+    #     obj = changes.pop("obj", self.obj)
+    #     evaluation_context = changes.pop("evaluation_context", self.evaluation_context)
+    #     return type(self)(obj, evaluation_context=evaluation_context)
+
     @property
     def evaluation_context(self):
         if self._evaluation_context is None:
@@ -1397,6 +1396,9 @@ class DeferredAnnotation:
                         )
                     except Exception:
                         if use_forwardref:
+                            if isinstance(self.obj, ForwardRef):
+                                return self.obj
+
                             # Try to construct a forwardref
                             ref = ForwardRef(
                                 self.as_str,
