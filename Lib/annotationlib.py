@@ -73,8 +73,6 @@ class EvaluationContext:
         cells=None,
         type_params=None
     ):
-        # TODO: I think this may need to be deferred in case vars(owner) changes
-        # When adding tests, try to make this fail
         self.globals = globals
         self._locals = locals
         self._owner = owner
