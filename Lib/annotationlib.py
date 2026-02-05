@@ -151,11 +151,6 @@ class EvaluationContext:
         new_locals.transmogrify(self._cells)
         return result
 
-    # Temporary aliases to not break earlier examples
-    evaluate_ast = evaluate
-    evaluate_string = evaluate
-    evaluate_code = evaluate
-
 
 class ForwardRef:
     """Wrapper that holds a forward reference.
