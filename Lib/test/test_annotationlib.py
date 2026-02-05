@@ -13,6 +13,7 @@ import typing
 import sys
 import unittest
 from annotationlib import (
+    DeferredAnnotation,
     Format,
     ForwardRef,
     get_annotations,
@@ -666,10 +667,17 @@ class TestGetAnnotations(unittest.TestCase):
             if format == Format.VALUE_WITH_FAKE_GLOBALS:
                 continue
             with self.subTest(format=format):
-                self.assertEqual(
-                    get_annotations(foo, format=format),
-                    {"a": "foo", "b": "str"},
-                )
+                if format == Format.DEFERRED:
+                    self.assertEqual(
+                        get_annotations(foo, format=format),
+                        {"a": DeferredAnnotation("foo"),
+                         "b": DeferredAnnotation("str")}
+                    )
+                else:
+                    self.assertEqual(
+                        get_annotations(foo, format=format),
+                        {"a": "foo", "b": "str"},
+                    )
 
         self.assertEqual(
             get_annotations(foo, eval_str=True, locals=locals()),
