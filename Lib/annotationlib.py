@@ -1336,9 +1336,13 @@ class DeferredAnnotation:
         if not isinstance(other, DeferredAnnotation):
             return NotImplemented
 
+        # AST objects need to be compared as strings for equality
+        self_obj = self.obj if not isinstance(self.obj, ast.AST) else self.as_str
+        other_obj = other.obj if not isinstance(other.obj, ast.AST) else other.as_str
+
         # Compare property to correctly handle ForwardRef cases
         return (
-            self.obj is other.obj
+            self_obj == other_obj
             and self.evaluation_context == other.evaluation_context
         )
 
