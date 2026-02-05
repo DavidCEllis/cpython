@@ -892,13 +892,13 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
 
             if _is_evaluate:
                 return DeferredAnnotation(
-                    _stringify_single(annos),
+                    annos.__ast_node__ if isinstance(annos, _Stringifier) else _stringify_single(annos),
                     evaluation_context=context
                 )
             else:
                 return {
                     key: DeferredAnnotation(
-                        _stringify_single(val),
+                        val.__ast_node__ if isinstance(val, _Stringifier) else _stringify_single(val),
                         evaluation_context=context
                     )
                     for key, val in annos.items()
