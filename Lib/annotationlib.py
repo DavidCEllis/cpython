@@ -80,6 +80,24 @@ class EvaluationContext:
         self._cells = cells
         self._type_params = type_params
 
+    def __eq__(self, other):
+        if not isinstance(other, EvaluationContext):
+            return NotImplemented
+
+        # Contexts are only equal if they hold the same references
+        # not if the references happen to be equal when checked
+        return (
+            self.globals is other.globals
+            and self._locals is other._locals
+            and self._owner is other._owner
+            and self._is_class == other._is_class
+            and self._type_params is other._type_params
+
+            # For cells, the dictionaries may not be the same object, check all cells match
+            and self._cells.keys() == other._cells.keys()
+            and all(self._cells[k] is other._cells[k] for k in self._cells)
+        )
+
     @property
     def locals(self):
         if self._locals is None:
@@ -1305,6 +1323,16 @@ class DeferredAnnotation:
 
         self._as_str = None
 
+    def __eq__(self, other):
+        if not isinstance(other, DeferredAnnotation):
+            return NotImplemented
+
+        # Compare property to correctly handle ForwardRef cases
+        return (
+            self.obj is other.obj
+            and self.evaluation_context == other.evaluation_context
+        )
+
     def __repr__(self):
         return f"{self.__class__.__name__}({self.as_str!r})"
 
@@ -1313,10 +1341,6 @@ class DeferredAnnotation:
         evaluation_context = changes.pop("evaluation_context", self.evaluation_context)
 
         return type(self)(obj, evaluation_context=evaluation_context)
-
-    def transform(self, transformer):
-        new_ast = transformer.visit(self.as_ast)
-        return self.__replace__(obj=new_ast)
 
     @property
     def as_str(self):
@@ -1331,13 +1355,20 @@ class DeferredAnnotation:
                 self._as_str = type_repr(self.obj)
         return self._as_str
 
-    @property
-    def as_ast(self):
-        if isinstance(self.obj, ast.AST):
-            return self.obj
-        if isinstance(self.obj, ForwardRef) and self.obj.__ast_node__:
-            return self.obj.__ast_node__
-        return compile(self.as_str, "<annotate>", "eval", flags=ast.PyCF_ONLY_AST).body
+    # This commented code existed to support AST transformations of deferred annotations
+    # I no longer think this is desirable but don't want to completely remove this yet.
+
+    # @property
+    # def as_ast(self):
+    #     if isinstance(self.obj, ast.AST):
+    #         return self.obj
+    #     if isinstance(self.obj, ForwardRef) and self.obj.__ast_node__:
+    #         return self.obj.__ast_node__
+    #     return compile(self.as_str, "<annotate>", "eval", flags=ast.PyCF_ONLY_AST).body
+
+    # def transform(self, transformer):
+    #     new_ast = transformer.visit(self.as_ast)
+    #     return self.__replace__(obj=new_ast)
 
     @property
     def evaluation_context(self):
