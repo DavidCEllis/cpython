@@ -1321,13 +1321,13 @@ class DeferredAnnotation:
     evaluate as VALUE or FORWARDREF will return the original object, STRING will
     return type_repr of the object.
     """
-    __slots__ = ("obj", "_evaluation_context", "_as_str")
+    __slots__ = ("_obj", "_evaluation_context", "_as_str")
 
     def __init_subclass__(cls, /, *args, **kwds):
         raise TypeError("Cannot subclass DeferredAnnotation")
 
     def __init__(self, obj, *, evaluation_context=None):
-        self.obj = obj
+        self._obj = obj
         self._evaluation_context = evaluation_context
 
         self._as_str = None
@@ -1337,8 +1337,8 @@ class DeferredAnnotation:
             return NotImplemented
 
         # AST objects need to be compared as strings for equality
-        self_obj = self.obj if not isinstance(self.obj, ast.AST) else self.as_str
-        other_obj = other.obj if not isinstance(other.obj, ast.AST) else other.as_str
+        self_obj = self._obj if not isinstance(self._obj, ast.AST) else self.as_str
+        other_obj = other._obj if not isinstance(other._obj, ast.AST) else other.as_str
 
         # Compare property to correctly handle ForwardRef cases
         return (
@@ -1352,14 +1352,14 @@ class DeferredAnnotation:
     @property
     def as_str(self):
         if self._as_str is None:
-            if isinstance(self.obj, str):
-                self._as_str = self.obj
-            elif isinstance(self.obj, ForwardRef):
-                self._as_str = self.obj.__forward_arg__
-            elif isinstance(self.obj, ast.AST):
-                self._as_str = ast.unparse(self.obj)
+            if isinstance(self._obj, str):
+                self._as_str = self._obj
+            elif isinstance(self._obj, ForwardRef):
+                self._as_str = self._obj.__forward_arg__
+            elif isinstance(self._obj, ast.AST):
+                self._as_str = ast.unparse(self._obj)
             else:
-                self._as_str = type_repr(self.obj)
+                self._as_str = type_repr(self._obj)
         return self._as_str
 
     # This commented code existed to support AST transformations of deferred annotations
@@ -1385,8 +1385,8 @@ class DeferredAnnotation:
     @property
     def evaluation_context(self):
         if self._evaluation_context is None:
-            if isinstance(self.obj, ForwardRef):
-                self._evaluation_context = self.obj.get_evaluation_context()
+            if isinstance(self._obj, ForwardRef):
+                self._evaluation_context = self._obj.get_evaluation_context()
 
         return self._evaluation_context
 
@@ -1399,18 +1399,18 @@ class DeferredAnnotation:
 
                 if (
                     (context := self.evaluation_context)
-                    and (isinstance(self.obj, (str, ast.AST, ForwardRef)))
+                    and (isinstance(self._obj, (str, ast.AST, ForwardRef)))
                 ):
                     try:
                         return context.evaluate(
-                            self.obj,
+                            self._obj,
                             use_forwardref,
                             extra_names,
                         )
                     except Exception:
                         if use_forwardref:
-                            if isinstance(self.obj, ForwardRef):
-                                return self.obj
+                            if isinstance(self._obj, ForwardRef):
+                                return self._obj
 
                             # Try to construct a forwardref
                             ref = ForwardRef(
@@ -1424,11 +1424,11 @@ class DeferredAnnotation:
 
                             return ref
                         raise
-                elif isinstance(self.obj, ast.AST):
+                elif isinstance(self._obj, ast.AST):
                     # AST object with no evaluation context - return as string
                     return self.as_str
 
-                return self.obj
+                return self._obj
             case Format.STRING:
                 return self.as_str
             case _:
