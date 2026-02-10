@@ -55,6 +55,12 @@ _SLOTS = (
 
 
 class EvaluationContext:
+    # This class handles creating a "locals" dictionary for the evaluation
+    # of annotations.
+    # The class namespace, cells and type parameters are merged into one
+    # dict for evaluation only when evaluation occurs in order to propagate
+    # changes that occur *after* the annotation is retrieved.
+
     __slots__ = (
         "globals",
         "_locals",
@@ -63,6 +69,7 @@ class EvaluationContext:
         "_cells",
         "_type_params",
     )
+
     def __init__(
         self,
         *,
