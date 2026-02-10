@@ -1362,26 +1362,6 @@ class DeferredAnnotation:
                 self._as_str = type_repr(self._obj)
         return self._as_str
 
-    # This commented code existed to support AST transformations of deferred annotations
-    # I no longer think this is desirable but don't want to completely remove this yet.
-
-    # @property
-    # def as_ast(self):
-    #     if isinstance(self.obj, ast.AST):
-    #         return self.obj
-    #     if isinstance(self.obj, ForwardRef) and self.obj.__ast_node__:
-    #         return self.obj.__ast_node__
-    #     return compile(self.as_str, "<annotate>", "eval", flags=ast.PyCF_ONLY_AST).body
-
-    # def transform(self, transformer):
-    #     new_ast = transformer.visit(self.as_ast)
-    #     return self.__replace__(obj=new_ast)
-
-    # def __replace__(self, **changes):
-    #     obj = changes.pop("obj", self.obj)
-    #     evaluation_context = changes.pop("evaluation_context", self.evaluation_context)
-    #     return type(self)(obj, evaluation_context=evaluation_context)
-
     @property
     def evaluation_context(self):
         if self._evaluation_context is None:
