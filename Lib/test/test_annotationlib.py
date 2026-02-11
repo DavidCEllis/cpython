@@ -2430,6 +2430,21 @@ class TestDeferredFormat(unittest.TestCase):
         for anno in annos.values():
             self.assertIsInstance(anno, DeferredAnnotation)
 
+    def test_no_unique_name(self):
+        # If unique names are not blocked, a literal ellipsis gets converted
+        # To a 'unique' name and fails evaluation
+
+        class Example:
+            a: list[...]
+            b: undefined  # Prevent caching from VALUE_WITH_FAKE_GLOBALS
+
+        annos = get_annotations(Example, format=Format.DEFERRED)
+
+        self.assertEqual(
+            list[...],
+            annos['a'].evaluate()
+        )
+
 
 class TestMakeAnnotateFunction(unittest.TestCase):
     def test_remade_annotation(self):
