@@ -2386,12 +2386,8 @@ class TestDeferredFormat(unittest.TestCase):
 
         self.assertIsInstance(a_fr, ForwardRef)
 
-    def test_evaluates_to_value(self):
-        # Test that deferred annotations evaluate to the same
-        # as value annotations, even when a value changes
-
-        # Note that we have to use `call_annotate_function`
-        # as otherwise `__annotations__` are cached and don't update
+    def test_evaluates_to_value_cached(self):
+        # Test that deferred annotations evaluate to the same values as value annotations
 
         variable = int
 
@@ -2400,7 +2396,7 @@ class TestDeferredFormat(unittest.TestCase):
             b: list[int | float]
             c: variable
 
-        value_annos = annotationlib.call_annotate_function(Example.__annotate__, format=Format.VALUE)
+        value_annos = annotationlib.get_annotations(Example, format=Format.VALUE)
         deferred_annos = get_annotations(Example, format=Format.DEFERRED)
 
         self.assertEqual(
@@ -2408,9 +2404,11 @@ class TestDeferredFormat(unittest.TestCase):
             {k: v.evaluate() for k, v in deferred_annos.items()}
         )
 
+        # __annotations__ is cached, as are DeferredAnnotation objects after they evaluate
+        # successfully.
         variable = str
 
-        value_annos = annotationlib.call_annotate_function(Example.__annotate__, format=Format.VALUE)
+        value_annos = get_annotations(Example, format=Format.VALUE)
 
         self.assertEqual(
             value_annos,
