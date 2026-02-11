@@ -490,7 +490,8 @@ class _Stringifier:
         elif (
             # In STRING format we don't bother with the create_unique_name() dance;
             # it's better to emit the repr() of the object instead of an opaque name.
-            self.__stringifier_dict__.format == Format.STRING
+            # For the DEFERRED format similarly we should not be creating names.
+            self.__stringifier_dict__.format in {Format.STRING, Format.DEFERRED}
             or other is None
             or type(other) in (str, int, float, bool, complex)
         ):
