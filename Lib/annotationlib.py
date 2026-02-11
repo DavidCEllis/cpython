@@ -149,6 +149,7 @@ class EvaluationContext:
 
     # TODO: Different name so people don't expect a `Format` option?
     def evaluate(self, obj, use_forwardref=False, extra_names=None):
+        # returns the evaluated value and a boolean to indicate if ForwardRef was required
         if isinstance(obj, ast.AST):
             expr = ast.fix_missing_locations(ast.Expression(body=obj))
             code = compile(expr, "<annotate>", "eval")
@@ -166,7 +167,7 @@ class EvaluationContext:
             locals.update(extra_names)
 
         try:
-            return eval(code, globals=self.globals, locals=locals)
+            return eval(code, globals=self.globals, locals=locals), False
         except Exception:
             if not use_forwardref:
                 raise
@@ -181,7 +182,7 @@ class EvaluationContext:
 
         result = eval(code, globals=self.globals, locals=new_locals)
         new_locals.transmogrify(self._cells)
-        return result
+        return result, True
 
 
 class ForwardRef:
@@ -343,7 +344,7 @@ class ForwardRef:
                 else:
                     raise
 
-            return result
+            return result[0]
 
     def _evaluate(self, globalns, localns, type_params=_sentinel, *, recursive_guard):
         import typing
@@ -854,7 +855,8 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
         # See: https://github.com/python/cpython/issues/138764
         # Only fail on NotImplementedError
         try:
-            annotate(Format.VALUE_WITH_FAKE_GLOBALS)
+            # Used to cache value annotations for deferred if successful
+            value_annotations = annotate(Format.VALUE_WITH_FAKE_GLOBALS)
         except NotImplementedError:
             # Both STRING and VALUE_WITH_FAKE_GLOBALS are not implemented: fallback to VALUE
             if format == Format.STRING:
@@ -865,7 +867,7 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
                     for k, v in annotate(Format.VALUE).items()
                 }
         except Exception:
-            pass
+            value_annotations = _sentinel
 
         globals = _StringifierDict({}, format=format)
         is_class = isinstance(owner, type)
@@ -900,13 +902,15 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
             if _is_evaluate:
                 return DeferredAnnotation(
                     annos.__ast_node__ if isinstance(annos, _Stringifier) else _stringify_single(annos),
-                    evaluation_context=context
+                    evaluation_context=context,
+                    resolved_value=value_annotations,
                 )
             else:
                 return {
                     key: DeferredAnnotation(
                         val.__ast_node__ if isinstance(val, _Stringifier) else _stringify_single(val),
-                        evaluation_context=context
+                        evaluation_context=context,
+                        resolved_value=value_annotations[key] if value_annotations is not _sentinel else _sentinel,
                     )
                     for key, val in annos.items()
                 }
@@ -1328,16 +1332,17 @@ class DeferredAnnotation:
     evaluate as VALUE or FORWARDREF will return the original object, STRING will
     return type_repr of the object.
     """
-    __slots__ = ("_obj", "_evaluation_context", "_as_str")
+    __slots__ = ("_obj", "_evaluation_context", "_as_str", "_resolved_value")
 
     def __init_subclass__(cls, /, *args, **kwds):
         raise TypeError("Cannot subclass DeferredAnnotation")
 
-    def __init__(self, obj, *, evaluation_context=None):
+    def __init__(self, obj, *, evaluation_context=None, resolved_value=_sentinel):
         self._obj = obj
         self._evaluation_context = evaluation_context
 
         self._as_str = None
+        self._resolved_value = resolved_value
 
     def __eq__(self, other):
         if not isinstance(other, DeferredAnnotation):
@@ -1382,6 +1387,9 @@ class DeferredAnnotation:
             case Format.DEFERRED:
                 return self
             case Format.VALUE | Format.FORWARDREF:
+                if self._resolved_value is not _sentinel:
+                    return self._resolved_value
+
                 use_forwardref = (format == Format.FORWARDREF)
 
                 if (
@@ -1389,32 +1397,40 @@ class DeferredAnnotation:
                     and (isinstance(self._obj, (str, ast.AST, ForwardRef)))
                 ):
                     try:
-                        return context.evaluate(
+                        result = context.evaluate(
                             self._obj,
                             use_forwardref,
                             extra_names,
                         )
                     except Exception:
-                        if use_forwardref:
-                            if isinstance(self._obj, ForwardRef):
-                                return self._obj
+                        if not use_forwardref:
+                            raise
+                    else:
+                        if not result[1]:
+                            self._resolved_value = result[0]
+                        return result[0]
 
-                            # Try to construct a forwardref
-                            ref = ForwardRef(
-                                self.as_str,
-                                owner=context._owner,
-                                is_class=context._is_class,
-                            )
-                            # Patch in cell/globals
-                            ref.__globals__ = context.globals
-                            ref.__cell__ = context._cells
+                    if isinstance(self._obj, ForwardRef):
+                        return self._obj
+                    else:
+                        # Try to construct a forwardref
+                        ref = ForwardRef(
+                            self.as_str,
+                            owner=context._owner,
+                            is_class=context._is_class,
+                        )
+                        # Patch in cell/globals
+                        ref.__globals__ = context.globals
+                        ref.__cell__ = context._cells
 
-                            return ref
-                        raise
+                        return ref
+
                 elif isinstance(self._obj, ast.AST):
                     # AST object with no evaluation context - return as string
+                    self._resolved_value = self.as_str
                     return self.as_str
 
+                self._resolved_value = self._obj
                 return self._obj
             case Format.STRING:
                 return self.as_str
