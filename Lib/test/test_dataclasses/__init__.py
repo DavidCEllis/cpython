@@ -938,7 +938,7 @@ class TestCase(unittest.TestCase):
 
         self.assertEqual(
             annotationlib.get_annotations(C.__init__),
-            {"return": None}
+            {"x": int, "return": None}
         )
 
     def test_missing_default(self):
@@ -2608,24 +2608,19 @@ class TestInitAnnotate(unittest.TestCase):
 
     def test_init_false_forwardref(self):
         # Test forward references in fields not required for __init__ annotations.
-
-        # At the moment this raises a NameError for VALUE annotations even though the
-        # undefined annotation is not required for the __init__ annotations.
-        # Ideally this will be fixed but currently there is no good way to resolve this
+        # The annotation that is not present in __init__ is not evaluated so does not break
+        # VALUE annotations
 
         @dataclass
         class F:
             not_in_init: list[undefined] = field(init=False, default=None)
             in_init: int
 
-        annos = annotationlib.get_annotations(F.__init__, format=annotationlib.Format.FORWARDREF)
+        annos = annotationlib.get_annotations(F.__init__)
         self.assertEqual(
             annos,
             {"in_init": int, "return": None},
         )
-
-        with self.assertRaises(NameError):
-            annos = annotationlib.get_annotations(F.__init__)  # NameError on not_in_init
 
 
 class TestRepr(unittest.TestCase):
