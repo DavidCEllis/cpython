@@ -278,7 +278,7 @@ class InitVar:
 # and type fields will have been populated.
 class Field:
     __slots__ = ('name',
-                 'type',
+                 '_type',
                  'default',
                  'default_factory',
                  'repr',
@@ -307,6 +307,16 @@ class Field:
         self.kw_only = kw_only
         self.doc = doc
         self._field_type = None
+
+    @property
+    def type(self):
+        if isinstance(self._type, annotationlib.DeferredAnnotation):
+            return self._type.evaluate(format=annotationlib.Format.FORWARDREF)
+        return self._type
+
+    @type.setter
+    def type(self, value):
+        self._type = value
 
     @recursive_repr()
     def __repr__(self):
@@ -445,7 +455,7 @@ class _FuncBuilder:
 
     def add_fn(self, name, args, body, *, locals=None, return_type=MISSING,
                overwrite_error=False, unconditional_add=False, decorator=None,
-               annotation_fields=None):
+               annotations=None):
         if locals is not None:
             self.locals.update(locals)
 
@@ -466,8 +476,10 @@ class _FuncBuilder:
 
         self.names.append(name)
 
-        if annotation_fields is not None:
-            self.method_annotations[name] = (annotation_fields, return_type)
+        if annotations is not None:
+            if return_type is not MISSING:
+                annotations["return"] = return_type
+            self.method_annotations[name] = annotations
 
         args = ','.join(args)
         body = '\n'.join(body)
@@ -511,11 +523,16 @@ class _FuncBuilder:
             fn.__qualname__ = f"{cls.__qualname__}.{fn.__name__}"
 
             try:
-                annotation_fields, return_type = self.method_annotations[name]
+                annotations = self.method_annotations[name]
             except KeyError:
                 pass
             else:
-                annotate_fn = _make_annotate_function(cls, name, annotation_fields, return_type)
+                annotate_fn = annotationlib.make_annotate_function(annotations)
+                annotate_fn.__qualname__ = f"{cls.__qualname__}.{name}.__annotate__"
+
+                # This is a flag for _add_slots to know it needs to regenerate this method
+                # In order to remove references to the original class when it is replaced
+                annotate_fn.__generated_by_dataclasses__ = True
                 fn.__annotate__ = annotate_fn
 
             if self.unconditional_adds.get(name, False):
@@ -531,49 +548,6 @@ class _FuncBuilder:
                         error_msg = f'{error_msg} {msg_extra}'
 
                     raise TypeError(error_msg)
-
-
-def _make_annotate_function(__class__, method_name, annotation_fields, return_type):
-    # Create an __annotate__ function for a dataclass
-    # Try to return annotations in the same format as they would be
-    # from a regular __init__ function
-
-    def __annotate__(format, /):
-        Format = annotationlib.Format
-        match format:
-            case Format.VALUE | Format.FORWARDREF | Format.STRING:
-                cls_annotations = {}
-                for base in reversed(__class__.__mro__):
-                    cls_annotations.update(
-                        annotationlib.get_annotations(base, format=format)
-                    )
-
-                new_annotations = {}
-                for k in annotation_fields:
-                    # gh-142214: The annotation may be missing in unusual dynamic cases.
-                    # If so, just skip it.
-                    try:
-                        new_annotations[k] = cls_annotations[k]
-                    except KeyError:
-                        pass
-
-                if return_type is not MISSING:
-                    if format == Format.STRING:
-                        new_annotations["return"] = annotationlib.type_repr(return_type)
-                    else:
-                        new_annotations["return"] = return_type
-
-                return new_annotations
-
-            case _:
-                raise NotImplementedError(format)
-
-    # This is a flag for _add_slots to know it needs to regenerate this method
-    # In order to remove references to the original class when it is replaced
-    __annotate__.__generated_by_dataclasses__ = True
-    __annotate__.__qualname__ = f"{__class__.__qualname__}.{method_name}.__annotate__"
-
-    return __annotate__
 
 
 def _field_assign(frozen, name, value, self_name):
@@ -687,7 +661,8 @@ def _init_fn(fields, std_fields, kw_only_fields, frozen, has_post_init,
                 raise TypeError(f'non-default argument {f.name!r} '
                                 f'follows default argument {seen_default.name!r}')
 
-    annotation_fields = [f.name for f in fields if f.init]
+    # Use internal type to get the deferred format if available
+    annotations = {f.name: f._type for f in fields if f.init}
 
     locals = {'__dataclass_HAS_DEFAULT_FACTORY__': _HAS_DEFAULT_FACTORY,
               '__dataclass_builtins_object__': object}
@@ -722,7 +697,7 @@ def _init_fn(fields, std_fields, kw_only_fields, frozen, has_post_init,
                         body_lines,
                         locals=locals,
                         return_type=None,
-                        annotation_fields=annotation_fields)
+                        annotations=annotations)
 
 
 def _frozen_get_del_attr(cls, fields, func_builder):
@@ -843,6 +818,10 @@ def _get_field(cls, a_name, a_type, default_kw_only):
     f.name = a_name
     f.type = a_type
 
+    # a_type may be deferred, retrieve it to get it in its evaluated
+    # form and only evaluate once.
+    f_eval_type = f.type
+
     # Assume it's a normal field until proven otherwise.  We're next
     # going to decide if it's a ClassVar or InitVar, everything else
     # is just a normal field.
@@ -864,9 +843,9 @@ def _get_field(cls, a_name, a_type, default_kw_only):
     # module).
     typing = sys.modules.get('typing')
     if typing:
-        if (_is_classvar(a_type, typing)
-            or (isinstance(f.type, str)
-                and _is_type(f.type, cls, typing, typing.ClassVar,
+        if (_is_classvar(f_eval_type, typing)
+            or (isinstance(f_eval_type, str)
+                and _is_type(f_eval_type, cls, typing, typing.ClassVar,
                              _is_classvar))):
             f._field_type = _FIELD_CLASSVAR
 
@@ -876,9 +855,9 @@ def _get_field(cls, a_name, a_type, default_kw_only):
         # The module we're checking against is the module we're
         # currently in (dataclasses.py).
         dataclasses = sys.modules[__name__]
-        if (_is_initvar(a_type, dataclasses)
-            or (isinstance(f.type, str)
-                and _is_type(f.type, cls, dataclasses, dataclasses.InitVar,
+        if (_is_initvar(f_eval_type, dataclasses)
+            or (isinstance(f_eval_type, str)
+                and _is_type(f_eval_type, cls, dataclasses, dataclasses.InitVar,
                              _is_initvar))):
             f._field_type = _FIELD_INITVAR
 
@@ -1039,7 +1018,7 @@ def _process_class(cls, init, repr, eq, order, unsafe_hash, frozen,
     # included, despite the fact that they're not real fields.  That's
     # dealt with later.
     cls_annotations = annotationlib.get_annotations(
-        cls, format=annotationlib.Format.FORWARDREF)
+        cls, format=annotationlib.Format.DEFERRED)
 
     # Now find fields in our class.  While doing so, validate some
     # things, and set the default values (as class attributes) where
@@ -1048,7 +1027,8 @@ def _process_class(cls, init, repr, eq, order, unsafe_hash, frozen,
     # Get a reference to this module for the _is_kw_only() test.
     KW_ONLY_seen = False
     dataclasses = sys.modules[__name__]
-    for name, type in cls_annotations.items():
+    for name, deferred_type in cls_annotations.items():
+        type = deferred_type.evaluate(format=annotationlib.Format.FORWARDREF)
         # See if this is a marker to change the value of kw_only.
         if (_is_kw_only(type, dataclasses)
             or (isinstance(type, str)
@@ -1063,7 +1043,7 @@ def _process_class(cls, init, repr, eq, order, unsafe_hash, frozen,
             kw_only = True
         else:
             # Otherwise it's a field of some type.
-            cls_fields.append(_get_field(cls, name, type, kw_only))
+            cls_fields.append(_get_field(cls, name, deferred_type, kw_only))
 
     for f in cls_fields:
         fields[f.name] = f
@@ -1392,9 +1372,10 @@ def _add_slots(cls, is_frozen, weakref_slot, defined_fields):
     # Get new annotations to remove references to the original class
     # in forward references
     newcls_ann = annotationlib.get_annotations(
-        newcls, format=annotationlib.Format.FORWARDREF)
+        newcls, format=annotationlib.Format.DEFERRED)
 
     # Fix references in dataclass Fields
+    init_annotations = {"return": None}
     for f in getattr(newcls, _FIELDS).values():
         try:
             ann = newcls_ann[f.name]
@@ -1402,12 +1383,17 @@ def _add_slots(cls, is_frozen, weakref_slot, defined_fields):
             pass
         else:
             f.type = ann
+            if f.init:
+                init_annotations[f.name] = ann
 
     # Fix the class reference in the __annotate__ method
     init = newcls.__init__
     if init_annotate := getattr(init, "__annotate__", None):
         if getattr(init_annotate, "__generated_by_dataclasses__", False):
-            _update_func_cell_for__class__(init_annotate, cls, newcls)
+            annotate = annotationlib.make_annotate_function(init_annotations)
+            annotate.__qualname__ = init_annotate.__qualname__
+            annotate.__generated_by_dataclasses__ = True
+            init.__annotate__ = annotate
 
     return newcls
 
@@ -1685,38 +1671,19 @@ def make_dataclass(cls_name, fields, *, bases=(), namespace=None, init=True,
         seen.add(name)
         annotations[name] = tp
 
-    # We initially block the VALUE format, because inside dataclass() we'll
-    # call get_annotations(), which will try the VALUE format first. If we don't
-    # block, that means we'd always end up eagerly importing typing here, which
-    # is what we're trying to avoid.
-    value_blocked = True
+    annos = {}
+    for ann, t in annotations.items():
+        # Avoid importing typing if it is not already imported
+        if t is _ANY_MARKER:
+            t = annotationlib.DeferredAnnotation(
+                annotationlib.ForwardRef("Any", module="typing")
+            )
+            # Fill the internal string cache - otherwise this will just be "Any"
+            t._as_str = "typing.Any"
 
-    def annotate_method(format):
-        def get_any():
-            match format:
-                case annotationlib.Format.STRING:
-                    return 'typing.Any'
-                case annotationlib.Format.FORWARDREF:
-                    typing = sys.modules.get("typing")
-                    if typing is None:
-                        return annotationlib.ForwardRef("Any", module="typing")
-                    else:
-                        return typing.Any
-                case annotationlib.Format.VALUE:
-                    if value_blocked:
-                        raise NotImplementedError
-                    from typing import Any
-                    return Any
-                case _:
-                    raise NotImplementedError
-        annos = {
-            ann: get_any() if t is _ANY_MARKER else t
-            for ann, t in annotations.items()
-        }
-        if format == annotationlib.Format.STRING:
-            return annotationlib.annotations_to_string(annos)
-        else:
-            return annos
+        annos[ann] = t
+
+    annotate_method = annotationlib.make_annotate_function(annos)
 
     # Update 'ns' with the user-supplied namespace plus our calculated values.
     def exec_body_callback(ns):
@@ -1747,8 +1714,6 @@ def make_dataclass(cls_name, fields, *, bases=(), namespace=None, init=True,
                     unsafe_hash=unsafe_hash, frozen=frozen,
                     match_args=match_args, kw_only=kw_only, slots=slots,
                     weakref_slot=weakref_slot)
-    # Now that the class is ready, allow the VALUE format.
-    value_blocked = False
     return cls
 
 
