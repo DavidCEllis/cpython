@@ -2306,9 +2306,6 @@ class TestDeferredFormat(unittest.TestCase):
 
         new_ref = deferred_ref.evaluate(format=Format.FORWARDREF)
 
-        # If there are cell variables, deferred *always* makes dictionaries
-        # Which would cause the ForwardRef to not be equal
-        new_ref.__cell__ = new_ref.__cell__["undefined"]
         self.assertEqual(new_ref, ref)
 
         self.assertEqual(
