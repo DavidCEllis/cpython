@@ -1684,6 +1684,7 @@ def make_dataclass(cls_name, fields, *, bases=(), namespace=None, init=True,
         annos[ann] = t
 
     annotate_method = annotationlib.make_annotate_function(annos)
+    annotate_method.__qualname__ = f"{cls_name}.__annotate__"
 
     # Update 'ns' with the user-supplied namespace plus our calculated values.
     def exec_body_callback(ns):
