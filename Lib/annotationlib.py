@@ -1391,11 +1391,14 @@ class DeferredAnnotation:
                 if self._resolved_value is not _sentinel:
                     return self._resolved_value
 
+                if isinstance(self._obj, ForwardRef):
+                    return self._obj.evaluate(format=format)
+
                 use_forwardref = (format == Format.FORWARDREF)
 
                 if (
                     (context := self.evaluation_context)
-                    and (isinstance(self._obj, (str, ast.AST, ForwardRef)))
+                    and (isinstance(self._obj, (str, ast.AST)))
                 ):
                     try:
                         result = context.evaluate(
@@ -1411,20 +1414,17 @@ class DeferredAnnotation:
                             self._resolved_value = result[0]
                         return result[0]
 
-                    if isinstance(self._obj, ForwardRef):
-                        return self._obj
-                    else:
-                        # Try to construct a forwardref
-                        ref = ForwardRef(
-                            self.as_str,
-                            owner=context._owner,
-                            is_class=context._is_class,
-                        )
-                        # Patch in cell/globals
-                        ref.__globals__ = context.globals
-                        ref.__cell__ = context._cells
+                    # Try to construct a forwardref
+                    ref = ForwardRef(
+                        self.as_str,
+                        owner=context._owner,
+                        is_class=context._is_class,
+                    )
+                    # Patch in cell/globals
+                    ref.__globals__ = context.globals
+                    ref.__cell__ = context._cells
 
-                        return ref
+                    return ref
 
                 elif isinstance(self._obj, ast.AST):
                     # AST object with no evaluation context - return as string
