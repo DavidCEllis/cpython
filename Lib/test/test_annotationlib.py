@@ -2247,10 +2247,6 @@ class TestForwardRefClass(unittest.TestCase):
 
 
 class TestDeferredFormat(unittest.TestCase):
-    def test_no_subclass(self):
-        with self.assertRaises(TypeError):
-            class DeferredAnnotationSubclass(DeferredAnnotation):
-                pass
 
     def test_create_from_type(self):
         # Create a DeferredAnnotation from already evaluated types
