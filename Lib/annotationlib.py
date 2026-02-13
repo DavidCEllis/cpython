@@ -1335,9 +1335,6 @@ class DeferredAnnotation:
     """
     __slots__ = ("_obj", "_evaluation_context", "_as_str", "_resolved_value")
 
-    def __init_subclass__(cls, /, *args, **kwds):
-        raise TypeError("Cannot subclass DeferredAnnotation")
-
     def __init__(self, obj, *, evaluation_context=None, resolved_value=_sentinel):
         self._obj = obj
         self._evaluation_context = evaluation_context
