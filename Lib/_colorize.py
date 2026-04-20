@@ -3,7 +3,7 @@ import os
 import sys
 
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass, field, Field
+from dataclasses import dataclass, field, Field, fields, MISSING, FrozenInstanceError
 
 COLORIZE = True
 
@@ -137,6 +137,53 @@ class ThemeSection(Mapping[str, str]):
     __dataclass_fields__: ClassVar[dict[str, Field[str]]]
     _name_to_value: Callable[[str], str]
 
+    def __init__(self, **kwargs) -> None:
+        flds = self.__dataclass_fields__
+        valid_names = {f.name for f in flds.values() if f.init}
+
+        for name, value in kwargs.items():
+            if name in valid_names:
+                object.__setattr__(self, name, value)
+                valid_names.remove(name)
+            else:
+                raise TypeError(
+                    f"{type(self).__name__}.__init__() "
+                    "got an unexpected keyword argument {name!r}"
+                )
+
+        for name in valid_names:
+            fld = flds[name]
+            if fld.default is not MISSING:
+                object.__setattr__(self, name, fld.default)
+            elif fld.default_factory is not MISSING:
+                object.__setattr__(self, name, fld.default_factory())
+
+        self.__post_init__()
+
+    def __repr__(self):
+        contents = ", ".join(
+            f"{f.name}={getattr(self, f.name)!r}"
+            for f in fields(self)
+            if f.repr
+        )
+        return f"{type(self).__name__}({contents})"
+
+    def __eq__(self, other):
+        if self is other:
+            return True
+        if type(self) is type(other):
+            return all(
+                getattr(self, f.name) == getattr(other, f.name)
+                for f in fields(self)
+                if f.compare
+            )
+
+    def __setattr__(self, name, value):
+        raise FrozenInstanceError(f"cannot assign to field {name!r}")
+
+    def __delattr__(self, name):
+        raise FrozenInstanceError(f"cannot delete field {name!r}")
+
     def __post_init__(self) -> None:
         name_to_value = {}
         for color_name in self.__dataclass_fields__:
@@ -167,7 +214,7 @@ class ThemeSection(Mapping[str, str]):
         return iter(self.__dataclass_fields__)
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(init=False, repr=False, eq=False, kw_only=True)
 class Argparse(ThemeSection):
     usage: str = ANSIColors.BOLD_BLUE
     prog: str = ANSIColors.BOLD_MAGENTA
@@ -189,7 +236,7 @@ class Argparse(ThemeSection):
     message: str = ANSIColors.MAGENTA
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(init=False, repr=False, eq=False, kw_only=True)
 class Ast(ThemeSection):
     node: str = ANSIColors.CYAN
     field: str = ANSIColors.BLUE
@@ -200,7 +247,7 @@ class Ast(ThemeSection):
     reset: str = ANSIColors.RESET
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(init=False, repr=False, eq=False, kw_only=True)
 class Difflib(ThemeSection):
     """A 'git diff'-like theme for `difflib.unified_diff`."""
     added: str = ANSIColors.GREEN
@@ -211,7 +258,7 @@ class Difflib(ThemeSection):
     reset: str = ANSIColors.RESET
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(init=False, repr=False, eq=False, kw_only=True)
 class FancyCompleter(ThemeSection):
     # functions and methods
     function: builtins.str = ANSIColors.BOLD_BLUE
@@ -235,7 +282,7 @@ class FancyCompleter(ThemeSection):
     str: builtins.str = ANSIColors.BOLD_GREEN
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(init=False, repr=False, eq=False, kw_only=True)
 class HttpServer(ThemeSection):
     error: str = ANSIColors.YELLOW
     path: str = ANSIColors.CYAN
@@ -251,7 +298,7 @@ class HttpServer(ThemeSection):
     reset: str = ANSIColors.RESET
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(init=False, repr=False, eq=False, kw_only=True)
 class LiveProfiler(ThemeSection):
     """Theme section for the live profiling TUI (Tachyon profiler).
 
@@ -359,7 +406,7 @@ LiveProfilerLight = LiveProfiler(
 )
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(init=False, repr=False, eq=False, kw_only=True)
 class Syntax(ThemeSection):
     prompt: str = ANSIColors.BOLD_MAGENTA
     keyword: str = ANSIColors.BOLD_BLUE
@@ -374,7 +421,7 @@ class Syntax(ThemeSection):
     reset: str = ANSIColors.RESET
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(init=False, repr=False, eq=False, kw_only=True)
 class Timeit(ThemeSection):
     timing: str = ANSIColors.CYAN
     best: str = ANSIColors.BOLD_GREEN
@@ -386,7 +433,7 @@ class Timeit(ThemeSection):
     reset: str = ANSIColors.RESET
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(init=False, repr=False, eq=False, kw_only=True)
 class Tokenize(ThemeSection):
     whitespace: str = ANSIColors.GREY
     error: str = ANSIColors.BOLD_RED
@@ -394,7 +441,7 @@ class Tokenize(ThemeSection):
     delimiter: str = ANSIColors.RESET
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(init=False, repr=False, eq=False, kw_only=True)
 class Traceback(ThemeSection):
     type: str = ANSIColors.BOLD_MAGENTA
     message: str = ANSIColors.MAGENTA
@@ -407,7 +454,7 @@ class Traceback(ThemeSection):
     reset: str = ANSIColors.RESET
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(init=False, repr=False, eq=False, kw_only=True)
 class Unittest(ThemeSection):
     passed: str = ANSIColors.GREEN
     warn: str = ANSIColors.YELLOW
