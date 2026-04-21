@@ -177,6 +177,7 @@ class ThemeSection(Mapping[str, str]):
                 for f in fields(self)
                 if f.compare
             )
+        return NotImplemented
 
     def __setattr__(self, name, value):
         raise FrozenInstanceError(f"cannot assign to field {name!r}")
