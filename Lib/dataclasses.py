@@ -1530,9 +1530,9 @@ def fields(class_or_instance):
 
 def get_methods(class_or_instance):
     """Return a set of the names of the methods that were
-       added to the dataclass.
+    added to the dataclass.
 
-       Accepts a dataclass or an instance of one.
+    Accepts a dataclass or an instance of one.
     """
     if _is_dataclass_instance(class_or_instance):
         cls = type(class_or_instance)
