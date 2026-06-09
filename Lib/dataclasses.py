@@ -4,6 +4,7 @@ import keyword
 import itertools
 import annotationlib
 import abc
+import enum
 from reprlib import recursive_repr
 lazy import copy
 lazy import re
@@ -427,101 +428,25 @@ def _tuple_str(obj_name, fields):
 
 
 class _FuncBuilder:
-    def __init__(self, globals):
-        self.names = []
-        self.src = []
-        self.globals = globals
-        self.locals = {}
-        self.overwrite_errors = {}
-        self.unconditional_adds = {}
-        self.method_annotations = {}
+    def __init__(self):
+        self.funcs = []
 
-    def add_fn(self, name, args, body, *, locals=None, return_type=MISSING,
-               overwrite_error=False, unconditional_add=False, decorator=None,
-               annotation_fields=None):
-        if locals is not None:
-            self.locals.update(locals)
-
-        # Keep track if this method is allowed to be overwritten if it already
-        # exists in the class.  The error is method-specific, so keep it with
-        # the name.  We'll use this when we generate all of the functions in
-        # the add_fns_to_class call.  overwrite_error is either True, in which
-        # case we'll raise an error, or it's a string, in which case we'll
-        # raise an error and append this string.
-        if overwrite_error:
-            self.overwrite_errors[name] = overwrite_error
-
-        # Should this function always overwrite anything that's already in the
-        # class?  The default is to not overwrite a function that already
-        # exists.
-        if unconditional_add:
-            self.unconditional_adds[name] = True
-
-        self.names.append(name)
-
-        if annotation_fields is not None:
-            self.method_annotations[name] = (annotation_fields, return_type)
-
-        args = ','.join(args)
-        body = '\n'.join(body)
-
-        # Compute the text of the entire function, add it to the text we're generating.
-        self.src.append(f'{f' {decorator}\n' if decorator else ''} def {name}({args}):\n{body}')
+    def add_fn(self, auto_method, *, overwrite_error=False, unconditional_add=False):
+        self.funcs.append((auto_method, overwrite_error, unconditional_add))
 
     def add_fns_to_class(self, cls):
-        # The source to all of the functions we're generating.
-        fns_src = '\n'.join(self.src)
-
-        # The locals they use.
-        local_vars = ','.join(self.locals.keys())
-
-        # The names of all of the functions, used for the return value of the
-        # outer function.  Need to handle the 0-tuple specially.
-        if len(self.names) == 0:
-            return_names = '()'
-        else:
-            return_names  =f'({",".join(self.names)},)'
-
-        # txt is the entire function we're going to execute, including the
-        # bodies of the functions we're defining.  Here's a greatly simplified
-        # version:
-        # def __create_fn__():
-        #  def __init__(self, x, y):
-        #   self.x = x
-        #   self.y = y
-        #  @recursive_repr
-        #  def __repr__(self):
-        #   return f"cls(x={self.x!r},y={self.y!r})"
-        # return __init__,__repr__
-
-        txt = f"def __create_fn__({local_vars}):\n{fns_src}\n return {return_names}"
-        ns = {}
-        exec(txt, self.globals, ns)
-        fns = ns['__create_fn__'](**self.locals)
-
-        # Now that we've generated the functions, assign them into cls.
-        for name, fn in zip(self.names, fns):
-            fn.__qualname__ = f"{cls.__qualname__}.{fn.__name__}"
-
-            try:
-                annotation_fields, return_type = self.method_annotations[name]
-            except KeyError:
-                pass
+        for auto_method, overwrite_error, unconditional_add in self.funcs:
+            name = auto_method.name
+            if unconditional_add:
+                setattr(cls, name, auto_method)
             else:
-                annotate_fn = _make_annotate_function(cls, name, annotation_fields, return_type)
-                fn.__annotate__ = annotate_fn
-
-            if self.unconditional_adds.get(name, False):
-                setattr(cls, name, fn)
-            else:
-                already_exists = _set_new_attribute(cls, name, fn)
-
+                already_exists = _set_new_attribute(cls, name, auto_method)
                 # See if it's an error to overwrite this particular function.
-                if already_exists and (msg_extra := self.overwrite_errors.get(name)):
-                    error_msg = (f'Cannot overwrite attribute {fn.__name__} '
+                if already_exists and overwrite_error:
+                    error_msg = (f'Cannot overwrite attribute {name} '
                                  f'in class {cls.__name__}')
-                    if not msg_extra is True:
-                        error_msg = f'{error_msg} {msg_extra}'
+                    if isinstance(overwrite_error, str):
+                        error_msg = f'{error_msg} {overwrite_error}'
 
                     raise TypeError(error_msg)
 
@@ -658,87 +583,6 @@ def _init_param(f):
         # There's a factory function.  Set a marker.
         default = '=__dataclass_HAS_DEFAULT_FACTORY__'
     return f'{f.name}{default}'
-
-
-def _init_fn(fields, std_fields, kw_only_fields, frozen, has_post_init,
-             self_name, func_builder, slots):
-    # fields contains both real fields and InitVar pseudo-fields.
-
-    # Make sure we don't have fields without defaults following fields
-    # with defaults.  This actually would be caught when exec-ing the
-    # function source code, but catching it here gives a better error
-    # message, and future-proofs us in case we build up the function
-    # using ast.
-
-    seen_default = None
-    for f in std_fields:
-        # Only consider the non-kw-only fields in the __init__ call.
-        if f.init:
-            if not (f.default is MISSING and f.default_factory is MISSING):
-                seen_default = f
-            elif seen_default:
-                raise TypeError(f'non-default argument {f.name!r} '
-                                f'follows default argument {seen_default.name!r}')
-
-    annotation_fields = [f.name for f in fields if f.init]
-
-    locals = {'__dataclass_HAS_DEFAULT_FACTORY__': _HAS_DEFAULT_FACTORY,
-              '__dataclass_builtins_object__': object}
-
-    body_lines = []
-    for f in fields:
-        line = _field_init(f, frozen, locals, self_name, slots)
-        # line is None means that this field doesn't require
-        # initialization (it's a pseudo-field).  Just skip it.
-        if line:
-            body_lines.append(line)
-
-    # Does this class have a post-init function?
-    if has_post_init:
-        params_str = ','.join(f.name for f in fields
-                              if f._field_type is _FIELD_INITVAR)
-        body_lines.append(f'  {self_name}.{_POST_INIT_NAME}({params_str})')
-
-    # If no body lines, use 'pass'.
-    if not body_lines:
-        body_lines = ['  pass']
-
-    _init_params = [_init_param(f) for f in std_fields]
-    if kw_only_fields:
-        # Add the keyword-only args.  Because the * can only be added if
-        # there's at least one keyword-only arg, there needs to be a test here
-        # (instead of just concatenating the lists together).
-        _init_params += ['*']
-        _init_params += [_init_param(f) for f in kw_only_fields]
-    func_builder.add_fn('__init__',
-                        [self_name] + _init_params,
-                        body_lines,
-                        locals=locals,
-                        return_type=None,
-                        annotation_fields=annotation_fields)
-
-
-def _frozen_set_del_attr(cls, fields, func_builder):
-    locals = {'__class__': cls,
-              'FrozenInstanceError': FrozenInstanceError}
-    condition = 'type(self) is __class__'
-    if fields:
-        condition += ' or name in {' + ', '.join(repr(f.name) for f in fields) + '}'
-
-    func_builder.add_fn('__setattr__',
-                        ('self', 'name', 'value'),
-                        (f'  if {condition}:',
-                          '   raise FrozenInstanceError(f"cannot assign to field {name!r}")',
-                         f'  super(__class__, self).__setattr__(name, value)'),
-                        locals=locals,
-                        overwrite_error=True)
-    func_builder.add_fn('__delattr__',
-                        ('self', 'name'),
-                        (f'  if {condition}:',
-                          '   raise FrozenInstanceError(f"cannot delete field {name!r}")',
-                         f'  super(__class__, self).__delattr__(name)'),
-                        locals=locals,
-                        overwrite_error=True)
 
 
 def _is_classvar(a_type, typing):
@@ -919,28 +763,13 @@ def _set_new_attribute(cls, name, value):
 
 # Decide if/how we're going to create a hash function.  Key is
 # (unsafe_hash, eq, frozen, does-hash-exist).  Value is the action to
-# take.  The common case is to do nothing, so instead of providing a
-# function that is a no-op, use None to signify that.
+# take.  The common case is to do nothing.
+class _HashAction(enum.Enum):
+    DO_NOTHING = enum.auto()
+    SET_NONE = enum.auto()
+    ADD_METHOD = enum.auto()
+    RAISE_EXCEPTION = enum.auto()
 
-def _hash_set_none(cls, fields, func_builder):
-    # It's sort of a hack that I'm setting this here, instead of at
-    # func_builder.add_fns_to_class time, but since this is an exceptional case
-    # (it's not setting an attribute to a function, but to a scalar value),
-    # just do it directly here.  I might come to regret this.
-    cls.__hash__ = None
-
-def _hash_add(cls, fields, func_builder):
-    flds = [f for f in fields if (f.compare if f.hash is None else f.hash)]
-    self_tuple = _tuple_str('self', flds)
-    func_builder.add_fn('__hash__',
-                        ('self',),
-                        [f'  return hash({self_tuple})'],
-                        unconditional_add=True)
-
-def _hash_exception(cls, fields, func_builder):
-    # Raise an exception.
-    raise TypeError(f'Cannot overwrite attribute __hash__ '
-                    f'in class {cls.__name__}')
 
 #
 #                +-------------------------------------- unsafe_hash?
@@ -951,22 +780,22 @@ def _hash_exception(cls, fields, func_builder):
 #                |      |      |      |        +-------  action
 #                |      |      |      |        |
 #                v      v      v      v        v
-_hash_action = {(False, False, False, False): None,
-                (False, False, False, True ): None,
-                (False, False, True,  False): None,
-                (False, False, True,  True ): None,
-                (False, True,  False, False): _hash_set_none,
-                (False, True,  False, True ): None,
-                (False, True,  True,  False): _hash_add,
-                (False, True,  True,  True ): None,
-                (True,  False, False, False): _hash_add,
-                (True,  False, False, True ): _hash_exception,
-                (True,  False, True,  False): _hash_add,
-                (True,  False, True,  True ): _hash_exception,
-                (True,  True,  False, False): _hash_add,
-                (True,  True,  False, True ): _hash_exception,
-                (True,  True,  True,  False): _hash_add,
-                (True,  True,  True,  True ): _hash_exception,
+_hash_action = {(False, False, False, False): _HashAction.DO_NOTHING,
+                (False, False, False, True ): _HashAction.DO_NOTHING,
+                (False, False, True,  False): _HashAction.DO_NOTHING,
+                (False, False, True,  True ): _HashAction.DO_NOTHING,
+                (False, True,  False, False): _HashAction.SET_NONE,
+                (False, True,  False, True ): _HashAction.DO_NOTHING,
+                (False, True,  True,  False): _HashAction.ADD_METHOD,
+                (False, True,  True,  True ): _HashAction.DO_NOTHING,
+                (True,  False, False, False): _HashAction.ADD_METHOD,
+                (True,  False, False, True ): _HashAction.RAISE_EXCEPTION,
+                (True,  False, True,  False): _HashAction.ADD_METHOD,
+                (True,  False, True,  True ): _HashAction.RAISE_EXCEPTION,
+                (True,  True,  False, False): _HashAction.ADD_METHOD,
+                (True,  True,  False, True ): _HashAction.RAISE_EXCEPTION,
+                (True,  True,  True,  False): _HashAction.ADD_METHOD,
+                (True,  True,  True,  True ): _HashAction.RAISE_EXCEPTION,
                 }
 # See https://bugs.python.org/issue32929#msg312829 for an if-statement
 # version of this table.
@@ -1004,20 +833,20 @@ class _AutoMethod:
     # There should only be one _AutoMethod instance *per method* not per
     # class.
 
-    __slots__ = ("method_name", "method_generator")
+    __slots__ = ("name", "generator")
 
-    def __init__(self, method_name, method_generator):
-        self.method_name = method_name
-        self.method_generator = method_generator
+    def __init__(self, name, generator):
+        self.name = name
+        self.generator = generator
 
     def __repr__(self):
-        return f"<{type(self).__name__} Method Generator for {self.method_name!r}>"
+        return f"<{type(self).__name__} Method Generator for {self.name!r}>"
 
     def __get__(self, obj, objtype=None):
         if objtype is None:
             objtype = type(obj)
 
-        if objtype.__dict__.get(self.method_name) is self:
+        if objtype.__dict__.get(self.name) is self:
             gen_cls = objtype
         else:
             # This may be called through super() in which case objtype
@@ -1025,7 +854,7 @@ class _AutoMethod:
             # Search the MRO to find the correct class
             gen_cls = None
             for c in objtype.__mro__[1:]:
-                if c.__dict__.get(self.method_name) is self:
+                if c.__dict__.get(self.name) is self:
                     gen_cls = c
                     break
             else:
@@ -1034,7 +863,7 @@ class _AutoMethod:
                 # objtype, type(objtype) for some reason
                 if mro := getattr(obj, "__mro__", None):
                     for c in mro:
-                        if c.__dict__.get(self.method_name) is self:
+                        if c.__dict__.get(self.name) is self:
                             gen_cls = c
                             break
 
@@ -1044,19 +873,21 @@ class _AutoMethod:
                         f"Could not find {self!r} in class {objtype.__name__!r} MRO."
                     )
 
-        method = self.method_generator(self.method_name, gen_cls)
-        setattr(gen_cls, self.method_name, method)
+        method = self.generator(self.name, gen_cls)
+        setattr(gen_cls, self.name, method)
         return method.__get__(obj, objtype)
 
 
-def _source_to_method(cls, name, source, locs, annotate=None, decorator=None):
-    # Convert source code methods to real methods
+def _source_to_method(cls, name, source, locals=None, annotate=None, decorator=None):
+    # This takes generated source code and local names and converts it into
+    # a real method. Needed for dataclass methods generated from source templates.
     if cls.__module__ in sys.modules:
         globs = sys.modules[cls.__module__].__dict__
     else:
         globs = {}
 
-    local_args = ", ".join(locs.keys())
+    locals = {} if locals is None else locals
+    local_args = ", ".join(locals.keys())
 
     ns = {}
     txt = (
@@ -1065,59 +896,43 @@ def _source_to_method(cls, name, source, locs, annotate=None, decorator=None):
         f" return {name}"
     )
     exec(txt, globs, ns)
-    method = ns["__create_fn__"](**locs)
-    method.__qualname__ = f"{cls.__qualname__}.{name}"
+    method = ns["__create_fn__"](**locals)
 
+    method.__qualname__ = f"{cls.__qualname__}.{name}"
     if annotate:
         method.__annotate__ = annotate
 
-    if decorator
+    if decorator:
         method = decorator(method)
 
     return method
 
 
-def _init_source_maker(cls):
-    fields = cls.__dict__[_FIELDS]
+# In the code values here, every string is prefixed to keep alignment
+def _init_source_maker(name, cls):
+    # Init needs _FIELD_INITVAR fields too
+    base_fields = cls.__dict__[_FIELDS]
     params = cls.__dict__[_PARAMS]
 
-    funcname = "__init__"
-
-    all_init_fields = [f for f in fields.values()
-                       if f._field_type in (_FIELD, _FIELD_INITVAR)]
+    fields = [f for f in base_fields.values()
+              if f._field_type in (_FIELD, _FIELD_INITVAR)]
     (std_fields,
-     kw_only_fields) = _fields_in_init_order(all_init_fields)
+     kw_only_fields) = _fields_in_init_order(fields)
 
     has_post_init = hasattr(cls, _POST_INIT_NAME)
     frozen = params.frozen
     slots = params.slots
-    self_name = '__dataclass_self__' if 'self' in fields else 'self'
 
-    # fields contains both real fields and InitVar pseudo-fields.
+    # Check the self_name against base_fields
+    self_name = '__dataclass_self__' if 'self' in base_fields else 'self'
 
-    # Make sure we don't have fields without defaults following fields
-    # with defaults.  This actually would be caught when exec-ing the
-    # function source code, but catching it here gives a better error
-    # message, and future-proofs us in case we build up the function
-    # using ast.
-
-    seen_default = None
-    for f in std_fields:
-        # Only consider the non-kw-only fields in the __init__ call.
-        if f.init:
-            if not (f.default is MISSING and f.default_factory is MISSING):
-                seen_default = f
-            elif seen_default:
-                raise TypeError(f'non-default argument {f.name!r} '
-                                f'follows default argument {seen_default.name!r}')
-
-    annotation_fields = [f.name for f in fields.values() if f.init]
+    annotation_fields = [f.name for f in fields if f.init]
 
     locals = {'__dataclass_HAS_DEFAULT_FACTORY__': _HAS_DEFAULT_FACTORY,
                 '__dataclass_builtins_object__': object}
 
     body_lines = []
-    for f in fields.values():
+    for f in fields:
         line = _field_init(f, frozen, locals, self_name, slots)
         # line is None means that this field doesn't require
         # initialization (it's a pseudo-field).  Just skip it.
@@ -1126,7 +941,7 @@ def _init_source_maker(cls):
 
     # Does this class have a post-init function?
     if has_post_init:
-        params_str = ','.join(f.name for f in fields.values()
+        params_str = ','.join(f.name for f in fields
                                 if f._field_type is _FIELD_INITVAR)
         body_lines.append(f'  {self_name}.{_POST_INIT_NAME}({params_str})')
 
@@ -1147,10 +962,121 @@ def _init_source_maker(cls):
     param_str = ", ".join(_init_params)
     body = "\n".join(body_lines)
 
-    code = f" def {funcname}({param_str}):\n{body}\n"
-    annotate = _make_annotate_function(cls, funcname, annotation_fields, None)
+    code = f" def {name}({param_str}):\n{body}"
+    annotate = _make_annotate_function(cls, name, annotation_fields, None)
 
-    return _source_to_method(cls, funcname, code, locals, annotate)
+    return _source_to_method(cls, name, code, locals, annotate=annotate)
+
+
+def _repr_source_maker(name, cls):
+    contents = ", ".join(
+        f"{f.name}={{self.{f.name}}}"
+        for f in fields(cls)
+        if f.repr
+    )
+    code = (
+        f' def {name}(self):\n'
+        f'  return f"{{self.__class__.__qualname__}}({contents})"'
+    )
+    return _source_to_method(cls, name, code, decorator=recursive_repr())
+
+
+def _eq_source_maker(name, cls):
+    # Create __eq__ method.  There's no need for a __ne__ method,
+    # since python will call __eq__ and negate it.
+    terms = [
+        f"self.{f.name}==other.{f.name}"
+        for f in fields(cls)
+        if f.compare
+    ]
+    field_comparisons = " and ".join(terms) or "True"
+    code = (
+        f' def {name}(self, other):\n'
+        u'  if self is other:\n'
+        u'   return True\n'
+        u'  if other.__class__ is self.__class__:\n'
+        f'   return {field_comparisons}\n'
+        u'  return NotImplemented'
+    )
+    return _source_to_method(cls, name, code)
+
+
+def _order_source_maker(op):
+    def maker(name, cls):
+        # Create a comparison function.  If the fields in the object are
+        # named 'x' and 'y', then self_tuple is the string
+        # '(self.x,self.y)' and other_tuple is the string
+        # '(other.x,other.y)'.
+        flds = [f for f in fields(cls) if f.compare]
+        self_tuple = _tuple_str('self', flds)
+        other_tuple = _tuple_str('other', flds)
+
+        code = (
+            f' def {name}(self, other):\n'
+            u'  if other.__class__ is self.__class__:\n'
+            f'   return {self_tuple}{op}{other_tuple}\n'
+            u'  return NotImplemented'
+        )
+
+        return _source_to_method(cls, name, code)
+
+    return maker
+
+
+def _frozen_setattr_maker(name, cls):
+    # There is only 1 setattr function for all frozen classes so no codegen
+    # is necessary.
+    flds = set(f.name for f in fields(cls))
+
+    def __setattr__(self, name, value):
+        if type(self) is cls or name in flds:
+            raise FrozenInstanceError(f"cannot assign to field {name!r}")
+        super(cls, self).__setattr__(name, value)
+
+    __setattr__.__name__ = name
+    __setattr__.__qualname__ = f"{cls.__qualname__}.{name}"
+
+    return __setattr__
+
+
+def _frozen_delattr_maker(name, cls):
+    # There is only 1 delattr function for all frozen classes so no codegen
+    # is necessary.
+    flds = set(f.name for f in fields(cls))
+
+    def __delattr__(self, name):
+        if type(self) is cls or name in flds:
+            raise FrozenInstanceError(f"cannot delete field {name!r}")
+        super(cls, self).__delattr__(name)
+
+    __delattr__.__name__ = name
+    __delattr__.__qualname__ = f"{cls.__qualname__}.{name}"
+
+    return __delattr__
+
+
+def _hash_source_maker(name, cls):
+    flds = [f for f in fields(cls) if (f.compare if f.hash is None else f.hash)]
+    self_tuple = _tuple_str('self', flds)
+
+    code = (
+        f" def {name}(self):\n"
+        f"  return hash({self_tuple})"
+    )
+
+    return _source_to_method(cls, name, code)
+
+
+_auto_init = _AutoMethod("__init__", _init_source_maker)
+_auto_repr = _AutoMethod("__repr__", _repr_source_maker)
+_auto_eq = _AutoMethod("__eq__", _eq_source_maker)
+_auto_ge = _AutoMethod("__ge__", _order_source_maker(">="))
+_auto_gt = _AutoMethod("__gt__", _order_source_maker(">"))
+_auto_le = _AutoMethod("__le__", _order_source_maker("<="))
+_auto_lt = _AutoMethod("__lt__", _order_source_maker("<"))
+_auto_frozen_setattr = _AutoMethod("__setattr__", _frozen_setattr_maker)
+_auto_frozen_delattr = _AutoMethod("__delattr__", _frozen_delattr_maker)
+_auto_hash = _AutoMethod("__hash__", _hash_source_maker)
 
 
 def _process_class(cls, init, repr, eq, order, unsafe_hash, frozen,
@@ -1160,16 +1086,6 @@ def _process_class(cls, init, repr, eq, order, unsafe_hash, frozen,
     # derived class fields overwrite base class fields, but the order
     # is defined by the base class, which is found first.
     fields = {}
-
-    if cls.__module__ in sys.modules:
-        globals = sys.modules[cls.__module__].__dict__
-    else:
-        # Theoretically this can happen if someone writes
-        # a custom string to cls.__module__.  In which case
-        # such dataclass won't be fully introspectable
-        # (w.r.t. typing.get_type_hints) but will still function
-        # correctly.
-        globals = {}
 
     setattr(cls, _PARAMS, _DataclassParams(init, repr, eq, order,
                                            unsafe_hash, frozen,
@@ -1295,93 +1211,57 @@ def _process_class(cls, init, repr, eq, order, unsafe_hash, frozen,
     # is used with match_args, below.
     all_init_fields = [f for f in fields.values()
                        if f._field_type in (_FIELD, _FIELD_INITVAR)]
-    (std_init_fields,
-     kw_only_init_fields) = _fields_in_init_order(all_init_fields)
 
-    func_builder = _FuncBuilder(globals)
+    std_init_fields, _ = _fields_in_init_order(all_init_fields)
+
+    func_builder = _FuncBuilder()
 
     if init:
-        # Does this class have a post-init function?
-        has_post_init = hasattr(cls, _POST_INIT_NAME)
+        # Make sure we don't have fields without defaults following fields
+        # with defaults.  This would be caught when exec-ing the
+        # function source code, but this is done lazily so it is better to
+        # catch it early when the class is defined.
+        seen_default = None
+        for f in std_init_fields:
+            # Only consider the non-kw-only fields in the __init__ call.
+            if f.init:
+                if not (f.default is MISSING and f.default_factory is MISSING):
+                    seen_default = f
+                elif seen_default:
+                    raise TypeError(f'non-default argument {f.name!r} '
+                                    f'follows default argument {seen_default.name!r}')
 
-        _init_fn(all_init_fields,
-                 std_init_fields,
-                 kw_only_init_fields,
-                 frozen,
-                 has_post_init,
-                 # The name to use for the "self"
-                 # param in __init__.  Use "self"
-                 # if possible.
-                 '__dataclass_self__' if 'self' in fields
-                 else 'self',
-                 func_builder,
-                 slots,
-                 )
+        func_builder.add_fn(_auto_init)
 
     _set_new_attribute(cls, '__replace__', _replace)
 
-    # Get the fields as a list, and include only real fields.  This is
-    # used in all of the following methods.
-    field_list = [f for f in fields.values() if f._field_type is _FIELD]
-
     if repr:
-        flds = [f for f in field_list if f.repr]
-        func_builder.add_fn('__repr__',
-                            ('self',),
-                            ['  return f"{self.__class__.__qualname__}(' +
-                             ', '.join([f"{f.name}={{self.{f.name}!r}}"
-                                        for f in flds]) + ')"'],
-                            locals={'__dataclasses_recursive_repr': recursive_repr},
-                            decorator="@__dataclasses_recursive_repr()")
-
+        func_builder.add_fn(_auto_repr)
     if eq:
-        # Create __eq__ method.  There's no need for a __ne__ method,
-        # since python will call __eq__ and negate it.
-        cmp_fields = (field for field in field_list if field.compare)
-        terms = [f'self.{field.name}==other.{field.name}' for field in cmp_fields]
-        field_comparisons = ' and '.join(terms) or 'True'
-        func_builder.add_fn('__eq__',
-                            ('self', 'other'),
-                            [ '  if self is other:',
-                              '   return True',
-                              '  if other.__class__ is self.__class__:',
-                             f'   return {field_comparisons}',
-                              '  return NotImplemented'])
-
+        func_builder.add_fn(_auto_eq)
     if order:
         # Create and set the ordering methods.
-        flds = [f for f in field_list if f.compare]
-        self_tuple = _tuple_str('self', flds)
-        other_tuple = _tuple_str('other', flds)
-        for name, op in [('__lt__', '<'),
-                         ('__le__', '<='),
-                         ('__gt__', '>'),
-                         ('__ge__', '>='),
-                         ]:
-            # Create a comparison function.  If the fields in the object are
-            # named 'x' and 'y', then self_tuple is the string
-            # '(self.x,self.y)' and other_tuple is the string
-            # '(other.x,other.y)'.
-            func_builder.add_fn(name,
-                            ('self', 'other'),
-                            [ '  if other.__class__ is self.__class__:',
-                             f'   return {self_tuple}{op}{other_tuple}',
-                              '  return NotImplemented'],
-                            overwrite_error='Consider using functools.total_ordering')
-
+        order_fns = [_auto_le, _auto_lt, _auto_ge, _auto_gt]
+        order_error = 'Consider using functools.total_ordering'
+        for func in order_fns:
+            func_builder.add_fn(func, overwrite_error=order_error)
     if frozen:
-        _frozen_set_del_attr(cls, field_list, func_builder)
+        func_builder.add_fn(_auto_frozen_delattr, overwrite_error=True)
+        func_builder.add_fn(_auto_frozen_setattr, overwrite_error=True)
 
     # Decide if/how we're going to create a hash function.
     hash_action = _hash_action[bool(unsafe_hash),
                                bool(eq),
                                bool(frozen),
                                has_explicit_hash]
-    if hash_action:
-        cls.__hash__ = hash_action(cls, field_list, func_builder)
-
-    # Generate the methods and add them to the class.
-    func_builder.add_fns_to_class(cls)
+    match hash_action:
+        case _HashAction.SET_NONE:
+            cls.__hash__ = None
+        case _HashAction.RAISE_EXCEPTION:
+            raise TypeError(f'Cannot overwrite attribute __hash__ '
+                            f'in class {cls.__name__}')
+        case _HashAction.ADD_METHOD:
+            func_builder.add_fn(_auto_hash, unconditional_add=True)
 
     if not getattr(cls, '__doc__'):
         # Create a class doc-string lazily via descriptor protocol
@@ -1398,6 +1278,11 @@ def _process_class(cls, init, repr, eq, order, unsafe_hash, frozen,
         raise TypeError('weakref_slot is True but slots is False')
     if slots:
         cls = _add_slots(cls, frozen, weakref_slot, fields)
+
+    # Add the method generators to the class
+    # This is done *after* slotting to prevent slot addition from
+    # triggering the creation of __init__
+    func_builder.add_fns_to_class(cls)
 
     abc.update_abstractmethods(cls)
 
