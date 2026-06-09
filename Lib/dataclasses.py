@@ -995,6 +995,60 @@ class _AutoDocstring:
 _auto_docstring = _AutoDocstring()
 
 
+class _AutoMethod:
+    # A non-data descriptor to autogenerate class methods on demand
+    # method_generator should be a callable that takes the method name
+    # and the class for which the method should be generated and returns
+    # the appropriate method.
+    #
+    # There should only be one _AutoMethod instance *per method* not per
+    # class.
+
+    __slots__ = ("method_name", "method_generator")
+
+    def __init__(self, method_name, method_generator):
+        self.method_name = method_name
+        self.method_generator = method_generator
+
+    def __repr__(self):
+        return f"<{type(self).__name__} Method Generator for {self.method_name!r}>"
+
+    def __get__(self, obj, objtype=None):
+        if objtype is None:
+            objtype = type(obj)
+
+        if objtype.__dict__.get(self.method_name) is self:
+            gen_cls = objtype
+        else:
+            # This may be called through super() in which case objtype
+            # may not be the class this descriptor is assigned to.
+            # Search the MRO to find the correct class
+            gen_cls = None
+            for c in objtype.__mro__[1:]:
+                if c.__dict__.get(self.method_name) is self:
+                    gen_cls = c
+                    break
+            else:
+                # Couldn't find the attribute, but perhaps this is being
+                # called by inspect.signature which calls __get__ with
+                # objtype, type(objtype) for some reason
+                if mro := getattr(obj, "__mro__", None):
+                    for c in mro:
+                        if c.__dict__.get(self.method_name) is self:
+                            gen_cls = c
+                            break
+
+                # __get__ has been manually called with bad arguments
+                if gen_cls is None:
+                    raise AttributeError(
+                        f"Could not find {self!r} in class {objtype.__name__!r} MRO."
+                    )
+
+        method = self.method_generator(self.method_name, gen_cls)
+        setattr(gen_cls, self.method_name, method)
+        return method.__get__(obj, objtype)
+
+
 def _process_class(cls, init, repr, eq, order, unsafe_hash, frozen,
                    match_args, kw_only, slots, weakref_slot):
     # Now that dicts retain insertion order, there's no reason to use
