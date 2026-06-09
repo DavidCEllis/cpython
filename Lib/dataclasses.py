@@ -207,6 +207,10 @@ _FIELDS = '__dataclass_fields__'
 # @dataclass.
 _PARAMS = '__dataclass_params__'
 
+# The name of an attribute on the class that stores a dict of dataclass
+# methods and their generators
+_METHODS = '__dataclass_methods__'
+
 # The name of the function, that if it exists, is called at the end of
 # __init__.
 _POST_INIT_NAME = '__post_init__'
@@ -435,10 +439,12 @@ class _FuncBuilder:
         self.funcs.append((auto_method, overwrite_error, unconditional_add))
 
     def add_fns_to_class(self, cls):
+        added_methods = {}
         for auto_method, overwrite_error, unconditional_add in self.funcs:
             name = auto_method.name
             if unconditional_add:
                 setattr(cls, name, auto_method)
+                added_methods[name] = auto_method
             else:
                 already_exists = _set_new_attribute(cls, name, auto_method)
                 # See if it's an error to overwrite this particular function.
@@ -449,6 +455,11 @@ class _FuncBuilder:
                         error_msg = f'{error_msg} {overwrite_error}'
 
                     raise TypeError(error_msg)
+
+                if not already_exists:
+                    added_methods[name] = auto_method
+
+        setattr(cls, _METHODS, added_methods)
 
 
 def _make_annotate_function(__class__, method_name, annotation_fields, return_type):
@@ -1518,6 +1529,26 @@ def fields(class_or_instance):
     # Exclude pseudo-fields.  Note that fields is sorted by insertion
     # order, so the order of the tuple is as the fields were defined.
     return tuple(f for f in fields.values() if f._field_type is _FIELD)
+
+
+def get_methods(class_or_instance):
+    """Return a set of the names of the methods that were
+       added to the dataclass.
+
+       Accepts a dataclass or an instance of one.
+    """
+    if _is_dataclass_instance(class_or_instance):
+        cls = type(class_or_instance)
+    else:
+        cls = class_or_instance
+
+    try:
+        method_dict = cls.__dict__[_METHODS]
+    except KeyError:
+        raise TypeError('must be called with a dataclass type or instance') from None
+
+    # Only return the names as a set, methods are private
+    return set(method_dict)
 
 
 def _is_dataclass_instance(obj):
