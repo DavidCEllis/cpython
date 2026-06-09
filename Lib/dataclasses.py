@@ -898,12 +898,14 @@ def _source_to_method(cls, name, source, locals=None, annotate=None, decorator=N
     exec(txt, globs, ns)
     method = ns["__create_fn__"](**locals)
 
-    method.__qualname__ = f"{cls.__qualname__}.{name}"
     if annotate:
         method.__annotate__ = annotate
 
     if decorator:
         method = decorator(method)
+
+    # Patch the qualname at the end due to evils done by pprint
+    method.__qualname__ = f"{cls.__qualname__}.{name}"
 
     return method
 
@@ -970,7 +972,7 @@ def _init_source_maker(name, cls):
 
 def _repr_source_maker(name, cls):
     contents = ", ".join(
-        f"{f.name}={{self.{f.name}}}"
+        f"{f.name}={{self.{f.name}!r}}"
         for f in fields(cls)
         if f.repr
     )
