@@ -895,6 +895,11 @@ def _source_to_method(cls, name, source, locals=None, annotate=None, decorator=N
     if cls.__module__ in sys.modules:
         globs = sys.modules[cls.__module__].__dict__
     else:
+        # Theoretically this can happen if someone writes
+        # a custom string to cls.__module__.  In which case
+        # such dataclass won't be fully introspectable
+        # (w.r.t. typing.get_type_hints) but will still function
+        # correctly.
         globs = {}
 
     locals = {} if locals is None else locals
