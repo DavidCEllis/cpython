@@ -1529,7 +1529,7 @@ def fields(class_or_instance):
 
 
 def get_methods(class_or_instance):
-    """Return a set of the names of the methods that were
+    """Return a frozenset of the names of the methods that were
     added to the dataclass.
 
     Accepts a dataclass or an instance of one.
@@ -1545,7 +1545,7 @@ def get_methods(class_or_instance):
         raise TypeError('must be called with a dataclass type or instance') from None
 
     # Only return the names as a set, methods are private
-    return set(method_dict)
+    return frozenset(method_dict)
 
 
 def _is_dataclass_instance(obj):
