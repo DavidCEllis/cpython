@@ -1049,6 +1049,110 @@ class _AutoMethod:
         return method.__get__(obj, objtype)
 
 
+def _source_to_method(cls, name, source, locs, annotate=None, decorator=None):
+    # Convert source code methods to real methods
+    if cls.__module__ in sys.modules:
+        globs = sys.modules[cls.__module__].__dict__
+    else:
+        globs = {}
+
+    local_args = ", ".join(locs.keys())
+
+    ns = {}
+    txt = (
+        f"def __create_fn__({local_args}):\n"
+        f"{source}\n"
+        f" return {name}"
+    )
+    exec(txt, globs, ns)
+    method = ns["__create_fn__"](**locs)
+    method.__qualname__ = f"{cls.__qualname__}.{name}"
+
+    if annotate:
+        method.__annotate__ = annotate
+
+    if decorator
+        method = decorator(method)
+
+    return method
+
+
+def _init_source_maker(cls):
+    fields = cls.__dict__[_FIELDS]
+    params = cls.__dict__[_PARAMS]
+
+    funcname = "__init__"
+
+    all_init_fields = [f for f in fields.values()
+                       if f._field_type in (_FIELD, _FIELD_INITVAR)]
+    (std_fields,
+     kw_only_fields) = _fields_in_init_order(all_init_fields)
+
+    has_post_init = hasattr(cls, _POST_INIT_NAME)
+    frozen = params.frozen
+    slots = params.slots
+    self_name = '__dataclass_self__' if 'self' in fields else 'self'
+
+    # fields contains both real fields and InitVar pseudo-fields.
+
+    # Make sure we don't have fields without defaults following fields
+    # with defaults.  This actually would be caught when exec-ing the
+    # function source code, but catching it here gives a better error
+    # message, and future-proofs us in case we build up the function
+    # using ast.
+
+    seen_default = None
+    for f in std_fields:
+        # Only consider the non-kw-only fields in the __init__ call.
+        if f.init:
+            if not (f.default is MISSING and f.default_factory is MISSING):
+                seen_default = f
+            elif seen_default:
+                raise TypeError(f'non-default argument {f.name!r} '
+                                f'follows default argument {seen_default.name!r}')
+
+    annotation_fields = [f.name for f in fields.values() if f.init]
+
+    locals = {'__dataclass_HAS_DEFAULT_FACTORY__': _HAS_DEFAULT_FACTORY,
+                '__dataclass_builtins_object__': object}
+
+    body_lines = []
+    for f in fields.values():
+        line = _field_init(f, frozen, locals, self_name, slots)
+        # line is None means that this field doesn't require
+        # initialization (it's a pseudo-field).  Just skip it.
+        if line:
+            body_lines.append(line)
+
+    # Does this class have a post-init function?
+    if has_post_init:
+        params_str = ','.join(f.name for f in fields.values()
+                                if f._field_type is _FIELD_INITVAR)
+        body_lines.append(f'  {self_name}.{_POST_INIT_NAME}({params_str})')
+
+    # If no body lines, use 'pass'.
+    if not body_lines:
+        body_lines = ['  pass']
+
+    _init_params = [self_name]
+    _init_params.extend(_init_param(f) for f in std_fields)
+
+    if kw_only_fields:
+        # Add the keyword-only args.  Because the * can only be added if
+        # there's at least one keyword-only arg, there needs to be a test here
+        # (instead of just concatenating the lists together).
+        _init_params += ['*']
+        _init_params += [_init_param(f) for f in kw_only_fields]
+
+    param_str = ", ".join(_init_params)
+    body = "\n".join(body_lines)
+
+    code = f" def {funcname}({param_str}):\n{body}\n"
+    annotate = _make_annotate_function(cls, funcname, annotation_fields, None)
+
+    return _source_to_method(cls, funcname, code, locals, annotate)
+
+
 def _process_class(cls, init, repr, eq, order, unsafe_hash, frozen,
                    match_args, kw_only, slots, weakref_slot):
     # Now that dicts retain insertion order, there's no reason to use
