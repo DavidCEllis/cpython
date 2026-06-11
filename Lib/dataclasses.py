@@ -9,6 +9,31 @@ from reprlib import recursive_repr
 lazy import copy
 lazy import re
 
+import atexit
+
+COUNTER = {
+    "Classes Created": 0,
+    "Frozen": 0,
+    "Ordered": 0,
+    "__init__": 0,
+    "__repr__": 0,
+    "__eq__": 0,
+    "__setattr__": 0,
+    "__delattr__": 0,
+    "__hash__": 0,
+    "__lt__": 0,
+    "__le__": 0,
+    "__gt__": 0,
+    "__ge__": 0,
+}
+
+def report():
+    for k, v in COUNTER.items():
+        if v > 0:
+            print(f"{k}: {v}")
+
+
+atexit.register(report)
 
 __all__ = ['dataclass',
            'field',
@@ -883,6 +908,8 @@ class _AutoMethod:
                         f"Could not find {self!r} in class {objtype.__name__!r} MRO."
                     )
 
+        COUNTER[self.name] += 1
+
         method = self.generator(self.name, gen_cls)
         setattr(gen_cls, self.name, method)
         return method.__get__(obj, objtype)
@@ -1101,6 +1128,13 @@ def _process_class(cls, init, repr, eq, order, unsafe_hash, frozen,
     # an ordered dict.  I am leveraging that ordering here, because
     # derived class fields overwrite base class fields, but the order
     # is defined by the base class, which is found first.
+
+    COUNTER["Classes Created"] += 1
+    if order:
+        COUNTER["Ordered"] += 1
+    if frozen:
+        COUNTER["Frozen"] += 1
+
     fields = {}
 
     setattr(cls, _PARAMS, _DataclassParams(init, repr, eq, order,
