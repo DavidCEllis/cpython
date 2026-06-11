@@ -1050,22 +1050,17 @@ def _order_source_maker(op):
 def _patching_order_maker(op):
     # This is a patching order maker that will patch the bytecode
     # of __lt__ to make the other methods
-    source_op = "__lt__"
+    source_op = "<"
+    source_op_name = "__lt__"
     raw_maker = _order_source_maker(op)
 
     # Don't use a patching maker for __lt__
     if op == source_op:
         return raw_maker
 
-    operators = {
-        "__lt__": "<",
-        "__le__": "<=",
-        "__gt__": ">",
-        "__ge__": ">=",
-    }
     def maker(name, cls):
         try:
-            base_func = cls.__dict__[source_op]
+            base_func = cls.__dict__[source_op_name]
             if isinstance(base_func, _AutoMethod):
                 # __lt__ has not been generated, make it
                 base_func = base_func.__get__(None, cls)
@@ -1089,7 +1084,7 @@ def _patching_order_maker(op):
             ">=": bytes((COMPARE_OP, GE_OP)),
         }
 
-        old_bytes = compare_op_bytes[operators[source_op]]
+        old_bytes = compare_op_bytes[source_op]
         new_bytes = compare_op_bytes[op]
 
         patched_code = base_code.replace(old_bytes, new_bytes)
