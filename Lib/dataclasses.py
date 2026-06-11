@@ -1047,23 +1047,51 @@ def _order_source_maker(op):
     return maker
 
 
-def _patching_order_maker(op):
+def _get_comparison_opcodes(*, _bytecode_cache={}):
+    # This is evil please tell me there's a better way
+
+    if not _bytecode_cache:
+        COMPARE_OP = opcode.opmap["COMPARE_OP"]
+        codes = ["__lt__", "__le__", "__gt__", "__ge__"]
+
+        # Define a function that will use the 4 oparg values
+        # we need to extract
+        def compare_finder():
+            () < ()
+            () <= ()
+            () > ()
+            () >= ()
+
+        # Extract the relevant opcodes and args from the bytecode
+        for code, arg in itertools.batched(compare_finder.__code__.co_code, 2):
+            if code == COMPARE_OP:
+                operator = codes.pop(0)
+                _bytecode_cache[operator] = bytes((COMPARE_OP, arg))
+            if not codes:  # all operators found
+                break
+        else:
+            raise RuntimeError(
+                "Could not find all 4 opargs, there is a logic error in this function"
+            )
+
+    return _bytecode_cache
+
+
+def _patching_order_maker(op, *, _bytecode_cache={}):
     # This is a patching order maker that will patch the bytecode
     # of __lt__ to make the other methods.
     # We use __lt__ as the base as it is the method that will be generated
     # for standard `sort()` on a list of instances of the same class
-    source_op = "<"
-    source_op_name = "__lt__"
     raw_maker = _order_source_maker(op)
 
     # Don't use a patching maker for __lt__
-    if op == source_op:
-        return raw_maker
+    if op not in {"<=", ">", ">="}:
+        raise ValueError(f"{op!r} is not a valid ordering operator")
 
     def maker(name, cls):
         try:
             # Pull from the class dict, we don't want to get inherited methods
-            base_func = cls.__dict__[source_op_name]
+            base_func = cls.__dict__["__lt__"]
             if isinstance(base_func, _AutoMethod):
                 # __lt__ has not been generated, make it
                 base_func = base_func.__get__(None, cls)
@@ -1073,24 +1101,10 @@ def _patching_order_maker(op):
             # Fall back to the standard generator
             return raw_maker(name, cls)
 
-        # Codes for operators
-        COMPARE_OP = opcode.opmap["COMPARE_OP"]
-        # Magic numbers - is there a proper source for these?
-        LT_OP = 2
-        LE_OP = 42
-        GT_OP = 132
-        GE_OP = 172
+        compare_op_bytes = _get_comparison_opcodes()
 
-        compare_op_bytes = {
-            "<": bytes((COMPARE_OP, LT_OP)),
-            "<=": bytes((COMPARE_OP, LE_OP)),
-            ">": bytes((COMPARE_OP, GT_OP)),
-            ">=": bytes((COMPARE_OP, GE_OP)),
-        }
-
-        old_bytes = compare_op_bytes[source_op]
-        new_bytes = compare_op_bytes[op]
-
+        old_bytes = compare_op_bytes["__lt__"]
+        new_bytes = compare_op_bytes[name]
         patched_code = base_code.replace(old_bytes, new_bytes)
 
         new_func = types.FunctionType(
@@ -1156,7 +1170,7 @@ _auto_eq = _AutoMethod("__eq__", _eq_source_maker)
 _auto_ge = _AutoMethod("__ge__", _patching_order_maker(">="))
 _auto_gt = _AutoMethod("__gt__", _patching_order_maker(">"))
 _auto_le = _AutoMethod("__le__", _patching_order_maker("<="))
-_auto_lt = _AutoMethod("__lt__", _patching_order_maker("<"))
+_auto_lt = _AutoMethod("__lt__", _order_source_maker("<"))
 _auto_frozen_setattr = _AutoMethod("__setattr__", _frozen_setattr_maker)
 _auto_frozen_delattr = _AutoMethod("__delattr__", _frozen_delattr_maker)
 _auto_hash = _AutoMethod("__hash__", _hash_source_maker)
