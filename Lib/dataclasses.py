@@ -1077,7 +1077,7 @@ def _get_comparison_opcodes(*, _bytecode_cache={}):
     return _bytecode_cache
 
 
-def _patching_order_maker(op, *, _bytecode_cache={}):
+def _patching_order_maker(op):
     # This is a patching order maker that will patch the bytecode
     # of __lt__ to make the other methods.
     # We use __lt__ as the base as it is the method that will be generated
