@@ -1049,7 +1049,9 @@ def _order_source_maker(op):
 
 def _patching_order_maker(op):
     # This is a patching order maker that will patch the bytecode
-    # of __lt__ to make the other methods
+    # of __lt__ to make the other methods.
+    # We use __lt__ as the base as it is the method that will be generated
+    # for standard `sort()` on a list of instances of the same class
     source_op = "<"
     source_op_name = "__lt__"
     raw_maker = _order_source_maker(op)
@@ -1060,6 +1062,7 @@ def _patching_order_maker(op):
 
     def maker(name, cls):
         try:
+            # Pull from the class dict, we don't want to get inherited methods
             base_func = cls.__dict__[source_op_name]
             if isinstance(base_func, _AutoMethod):
                 # __lt__ has not been generated, make it
@@ -1072,6 +1075,7 @@ def _patching_order_maker(op):
 
         # Codes for operators
         COMPARE_OP = opcode.opmap["COMPARE_OP"]
+        # Magic numbers - is there a proper source for these?
         LT_OP = 2
         LE_OP = 42
         GT_OP = 132
