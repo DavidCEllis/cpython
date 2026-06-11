@@ -1019,8 +1019,8 @@ def _eq_source_maker(name, cls):
 
 
 def _order_source_maker(op):
-    # This is the base order function maker that will create whichever
-    # ordering method is created first
+    # This is the base order function maker that will create the __lt__ function
+    # It is also used as a backup in case the __lt__ function has been replaced
     def maker(name, cls):
         # Create a comparison function.  If the fields in the object are
         # named 'x' and 'y', then self_tuple is the string
@@ -1049,38 +1049,30 @@ def _order_source_maker(op):
 
 def _patching_order_maker(op):
     # This is a patching order maker that will patch the bytecode
-    # of whichever method was created first
-    # This means that once one comparison function has been created
-    # the others will be created by patching the first one.
+    # of __lt__ to make the other methods
+    source_op = "__lt__"
+    raw_maker = _order_source_maker(op)
+
+    # Don't use a patching maker for __lt__
+    if op == source_op:
+        return raw_maker
+
     operators = {
         "__lt__": "<",
         "__le__": "<=",
         "__gt__": ">",
         "__ge__": ">=",
     }
-    raw_maker = _order_source_maker(op)
-
     def maker(name, cls):
-        for n in operators:
-            if n == name:
-                # Don't attempt to retrieve this method
-                continue
-
-            # Here we pull from the class dict as we both only want to find methods
-            # on this exact class, but also we don't want to trigger generation of
-            # any other _AutoMethods.
-            base_func = cls.__dict__.get(n, None)
-            if (
-                base_func
-                and not isinstance(base_func, _AutoMethod)
-                and (base_code := getattr(base_func, "__dataclass_method_raw_bytecode__", None))
-            ):
-                # In order to be a patchable function it needs to have been generated
-                # and have the "__dataclass_method_raw_bytecode__" attribute
-                opname = n
-                break
-        else:
-            # Can't find a method to patch
+        try:
+            base_func = cls.__dict__[source_op]
+            if isinstance(base_func, _AutoMethod):
+                # __lt__ has not been generated, make it
+                base_func = base_func.__get__(None, cls)
+            base_code = getattr(base_func, "__dataclass_method_raw_bytecode__")
+        except AttributeError:
+            # If the __lt__ function does not exist or fails for some reason
+            # Fall back to the standard generator
             return raw_maker(name, cls)
 
         # Codes for operators
@@ -1097,7 +1089,7 @@ def _patching_order_maker(op):
             ">=": bytes((COMPARE_OP, GE_OP)),
         }
 
-        old_bytes = compare_op_bytes[operators[opname]]
+        old_bytes = compare_op_bytes[operators[source_op]]
         new_bytes = compare_op_bytes[op]
 
         patched_code = base_code.replace(old_bytes, new_bytes)
