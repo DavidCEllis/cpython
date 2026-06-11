@@ -8,6 +8,7 @@ import enum
 from reprlib import recursive_repr
 lazy import copy
 lazy import re
+lazy import opcode  # evil lurks here
 
 
 __all__ = ['dataclass',
@@ -1018,6 +1019,8 @@ def _eq_source_maker(name, cls):
 
 
 def _order_source_maker(op):
+    # This is the base order function maker that will create whichever
+    # ordering method is created first
     def maker(name, cls):
         # Create a comparison function.  If the fields in the object are
         # named 'x' and 'y', then self_tuple is the string
@@ -1034,7 +1037,80 @@ def _order_source_maker(op):
             u'  return NotImplemented'
         )
 
-        return _source_to_method(cls, name, code)
+        method = _source_to_method(cls, name, code)
+
+        # Store the original bytecode for patching by other comparisons
+        original_code = method.__code__.co_code
+        setattr(method, "__dataclass_method_raw_bytecode__", original_code)
+        return method
+
+    return maker
+
+
+def _patching_order_maker(op):
+    # This is a patching order maker that will patch the bytecode
+    # of whichever method was created first
+    # This means that once one comparison function has been created
+    # the others will be created by patching the first one.
+    operators = {
+        "__lt__": "<",
+        "__le__": "<=",
+        "__gt__": ">",
+        "__ge__": ">=",
+    }
+    raw_maker = _order_source_maker(op)
+
+    def maker(name, cls):
+        for n in operators:
+            if n == name:
+                # Don't attempt to retrieve this method
+                continue
+
+            # Here we pull from the class dict as we both only want to find methods
+            # on this exact class, but also we don't want to trigger generation of
+            # any other _AutoMethods.
+            base_func = cls.__dict__.get(n, None)
+            if (
+                base_func
+                and not isinstance(base_func, _AutoMethod)
+                and (base_code := getattr(base_func, "__dataclass_method_raw_bytecode__", None))
+            ):
+                # In order to be a patchable function it needs to have been generated
+                # and have the "__dataclass_method_raw_bytecode__" attribute
+                opname = n
+                break
+        else:
+            # Can't find a method to patch
+            return raw_maker(name, cls)
+
+        # Codes for operators
+        COMPARE_OP = opcode.opmap["COMPARE_OP"]
+        LT_OP = 2
+        LE_OP = 42
+        GT_OP = 132
+        GE_OP = 172
+
+        compare_op_bytes = {
+            "<": bytes((COMPARE_OP, LT_OP)),
+            "<=": bytes((COMPARE_OP, LE_OP)),
+            ">": bytes((COMPARE_OP, GT_OP)),
+            ">=": bytes((COMPARE_OP, GE_OP)),
+        }
+
+        old_bytes = compare_op_bytes[operators[opname]]
+        new_bytes = compare_op_bytes[op]
+
+        patched_code = base_code.replace(old_bytes, new_bytes)
+
+        new_func = types.FunctionType(
+            base_func.__code__.replace(co_code=patched_code),
+            base_func.__globals__,
+            name=name,
+        )
+
+        new_func.__qualname__ = f"{cls.__qualname__}.{name}"
+
+        return new_func
 
     return maker
 
@@ -1086,10 +1162,10 @@ def _hash_source_maker(name, cls):
 _auto_init = _AutoMethod("__init__", _init_source_maker)
 _auto_repr = _AutoMethod("__repr__", _repr_source_maker)
 _auto_eq = _AutoMethod("__eq__", _eq_source_maker)
-_auto_ge = _AutoMethod("__ge__", _order_source_maker(">="))
-_auto_gt = _AutoMethod("__gt__", _order_source_maker(">"))
-_auto_le = _AutoMethod("__le__", _order_source_maker("<="))
-_auto_lt = _AutoMethod("__lt__", _order_source_maker("<"))
+_auto_ge = _AutoMethod("__ge__", _patching_order_maker(">="))
+_auto_gt = _AutoMethod("__gt__", _patching_order_maker(">"))
+_auto_le = _AutoMethod("__le__", _patching_order_maker("<="))
+_auto_lt = _AutoMethod("__lt__", _patching_order_maker("<"))
 _auto_frozen_setattr = _AutoMethod("__setattr__", _frozen_setattr_maker)
 _auto_frozen_delattr = _AutoMethod("__delattr__", _frozen_delattr_maker)
 _auto_hash = _AutoMethod("__hash__", _hash_source_maker)
