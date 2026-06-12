@@ -856,15 +856,15 @@ class _AutoMethod:
         if objtype is None:
             objtype = type(obj)
 
-        if objtype.__dict__.get(self.name) is self:
+        if objtype.__dict__.get(_METHODS, {}).get(self.name) is self:
             gen_cls = objtype
         else:
-            # This may be called through super() in which case objtype
-            # may not be the class this descriptor is assigned to.
-            # Search the MRO to find the correct class
+            # This may be accessed from a subclass or through super() in
+            # which case objtype may not be the class this descriptor is
+            # assigned to. Search the MRO to find the correct class.
             gen_cls = None
             for c in objtype.__mro__[1:]:
-                if c.__dict__.get(self.name) is self:
+                if c.__dict__.get(_METHODS, {}).get(self.name) is self:
                     gen_cls = c
                     break
             else:
@@ -873,7 +873,7 @@ class _AutoMethod:
                 # objtype, type(objtype) for some reason
                 if mro := getattr(obj, "__mro__", None):
                     for c in mro:
-                        if c.__dict__.get(self.name) is self:
+                        if c.__dict__.get(_METHODS, {}).get(self.name) is self:
                             gen_cls = c
                             break
 
