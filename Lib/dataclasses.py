@@ -841,6 +841,9 @@ class _AutoMethod:
     # and the class for which the method should be generated and returns
     # the appropriate method.
 
+    # As this descriptor is added to the class after creation we get the name
+    # and class directly in the constructor as `__set_name__` wouldn't be called
+
     __slots__ = ("name", "generator", "cls")
 
     def __init__(self, name, generator, cls):
@@ -852,6 +855,8 @@ class _AutoMethod:
         return f"<{type(self).__name__} Method Generator for {self.name!r} on {self.cls.__qualname__!r}>"
 
     def __get__(self, obj, objtype=None):
+        # Generate the method and replace this descriptor with that method
+        # on the class it has been assigned to.
         method = self.generator(self.name, self.cls)
         setattr(self.cls, self.name, method)
         return method.__get__(obj, objtype)
