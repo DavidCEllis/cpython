@@ -435,13 +435,14 @@ class _FuncBuilder:
     def __init__(self):
         self.funcs = []
 
-    def add_fn(self, auto_method, *, overwrite_error=False, unconditional_add=False):
-        self.funcs.append((auto_method, overwrite_error, unconditional_add))
+    def add_fn(self, name, maker, *, overwrite_error=False, unconditional_add=False):
+        self.funcs.append((name, maker, overwrite_error, unconditional_add))
 
     def add_fns_to_class(self, cls):
         added_methods = {}
-        for auto_method, overwrite_error, unconditional_add in self.funcs:
-            name = auto_method.name
+        for name, maker, overwrite_error, unconditional_add in self.funcs:
+            auto_method = _AutoMethod(name, maker, cls)
+
             if unconditional_add:
                 setattr(cls, name, auto_method)
                 added_methods[name] = auto_method
@@ -839,52 +840,20 @@ class _AutoMethod:
     # method_generator should be a callable that takes the method name
     # and the class for which the method should be generated and returns
     # the appropriate method.
-    #
-    # There should only be one _AutoMethod instance *per method* not per
-    # class.
 
-    __slots__ = ("name", "generator")
+    __slots__ = ("name", "generator", "cls")
 
-    def __init__(self, name, generator):
+    def __init__(self, name, generator, cls):
         self.name = name
         self.generator = generator
+        self.cls = cls
 
     def __repr__(self):
-        return f"<{type(self).__name__} Method Generator for {self.name!r}>"
+        return f"<{type(self).__name__} Method Generator for {self.name!r} on {self.cls.__qualname__!r}>"
 
     def __get__(self, obj, objtype=None):
-        if objtype is None:
-            objtype = type(obj)
-
-        if objtype.__dict__.get(_METHODS, {}).get(self.name) is self:
-            gen_cls = objtype
-        else:
-            # This may be accessed from a subclass or through super() in
-            # which case objtype may not be the class this descriptor is
-            # assigned to. Search the MRO to find the correct class.
-            gen_cls = None
-            for c in objtype.__mro__[1:]:
-                if c.__dict__.get(_METHODS, {}).get(self.name) is self:
-                    gen_cls = c
-                    break
-            else:
-                # Couldn't find the attribute, but perhaps this is being
-                # called by inspect.signature which calls __get__ with
-                # objtype, type(objtype) for some reason
-                if mro := getattr(obj, "__mro__", None):
-                    for c in mro:
-                        if c.__dict__.get(_METHODS, {}).get(self.name) is self:
-                            gen_cls = c
-                            break
-
-                # __get__ has been manually called with bad arguments
-                if gen_cls is None:
-                    raise AttributeError(
-                        f"Could not find {self!r} in class {objtype.__name__!r} MRO."
-                    )
-
-        method = self.generator(self.name, gen_cls)
-        setattr(gen_cls, self.name, method)
+        method = self.generator(self.name, self.cls)
+        setattr(self.cls, self.name, method)
         return method.__get__(obj, objtype)
 
 
@@ -1038,6 +1007,10 @@ def _order_source_maker(op):
 
     return maker
 
+_lt_maker = _order_source_maker("<")
+_le_maker = _order_source_maker("<=")
+_gt_maker = _order_source_maker(">")
+_ge_maker = _order_source_maker(">=")
 
 def _frozen_setattr_maker(name, cls):
     # There is only 1 setattr function for all frozen classes so no codegen
@@ -1081,18 +1054,6 @@ def _hash_source_maker(name, cls):
     )
 
     return _source_to_method(cls, name, code)
-
-
-_auto_init = _AutoMethod("__init__", _init_source_maker)
-_auto_repr = _AutoMethod("__repr__", _repr_source_maker)
-_auto_eq = _AutoMethod("__eq__", _eq_source_maker)
-_auto_ge = _AutoMethod("__ge__", _order_source_maker(">="))
-_auto_gt = _AutoMethod("__gt__", _order_source_maker(">"))
-_auto_le = _AutoMethod("__le__", _order_source_maker("<="))
-_auto_lt = _AutoMethod("__lt__", _order_source_maker("<"))
-_auto_frozen_setattr = _AutoMethod("__setattr__", _frozen_setattr_maker)
-_auto_frozen_delattr = _AutoMethod("__delattr__", _frozen_delattr_maker)
-_auto_hash = _AutoMethod("__hash__", _hash_source_maker)
 
 
 def _process_class(cls, init, repr, eq, order, unsafe_hash, frozen,
@@ -1247,23 +1208,28 @@ def _process_class(cls, init, repr, eq, order, unsafe_hash, frozen,
                     raise TypeError(f'non-default argument {f.name!r} '
                                     f'follows default argument {seen_default.name!r}')
 
-        func_builder.add_fn(_auto_init)
+        func_builder.add_fn("__init__", _init_source_maker)
 
     _set_new_attribute(cls, '__replace__', _replace)
 
     if repr:
-        func_builder.add_fn(_auto_repr)
+        func_builder.add_fn("__repr__", _repr_source_maker)
     if eq:
-        func_builder.add_fn(_auto_eq)
+        func_builder.add_fn("__eq__", _eq_source_maker)
     if order:
         # Create and set the ordering methods.
-        order_fns = [_auto_le, _auto_lt, _auto_ge, _auto_gt]
+        order_makers = [
+            ("__lt__", _lt_maker),
+            ("__le__", _le_maker),
+            ("__gt__", _gt_maker),
+            ("__ge__", _ge_maker),
+        ]
         order_error = 'Consider using functools.total_ordering'
-        for func in order_fns:
-            func_builder.add_fn(func, overwrite_error=order_error)
+        for name, maker in order_makers:
+            func_builder.add_fn(name, maker, overwrite_error=order_error)
     if frozen:
-        func_builder.add_fn(_auto_frozen_delattr, overwrite_error=True)
-        func_builder.add_fn(_auto_frozen_setattr, overwrite_error=True)
+        func_builder.add_fn("__delattr__", _frozen_delattr_maker, overwrite_error=True)
+        func_builder.add_fn("__setattr__", _frozen_setattr_maker, overwrite_error=True)
 
     # Decide if/how we're going to create a hash function.
     hash_action = _hash_action[bool(unsafe_hash),
@@ -1277,7 +1243,7 @@ def _process_class(cls, init, repr, eq, order, unsafe_hash, frozen,
             raise TypeError(f'Cannot overwrite attribute __hash__ '
                             f'in class {cls.__name__}')
         case _HashAction.ADD_METHOD:
-            func_builder.add_fn(_auto_hash, unconditional_add=True)
+            func_builder.add_fn("__hash__", _hash_source_maker, unconditional_add=True)
 
     if not getattr(cls, '__doc__'):
         # Create a class doc-string lazily via descriptor protocol
