@@ -858,18 +858,22 @@ class _AutoMethod:
             f"for {self.name!r} on {self.cls.__qualname__!r}>"
         )
 
-    def __get__(self, obj, objtype=None):
+    def generate(self):
         if self._generated_method is None:
             with self._lock:
-                # Secondary check for threads that were blocked
                 if self._generated_method is None:
                     method = self.generator(self.name, self.cls)
                     # Add the tag *before* assignment or caching
                     setattr(method, _GENERATED_TAG, True)
                     setattr(self.cls, self.name, method)
                     self._generated_method = method
+        return self._generated_method
 
-        return self._generated_method.__get__(obj, objtype)
+    def __call__(self, *args, **kwargs):
+        return self.generate()(*args, **kwargs)
+
+    def __get__(self, obj, objtype=None):
+        return self.generate().__get__(obj, objtype)
 
 
 def _source_to_method(cls, name, source, locals=None, annotate=None, decorator=None):
