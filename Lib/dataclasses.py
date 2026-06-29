@@ -880,7 +880,6 @@ def _source_to_method(cls, name, source, locals=None, annotate=None, decorator=N
     # This takes generated source code and local names and converts it into
     # a real method. Needed for dataclass methods generated from source templates.
     if module := sys.modules.get(cls.__module__):
-        # Make a copy to avoid mutating module globals if `__builtins__` doesn't exist
         globals = module.__dict__
     else:
         # Theoretically this can happen if someone writes
