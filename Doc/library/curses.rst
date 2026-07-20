@@ -76,6 +76,8 @@ Initialization and termination
    Initialize the library. Return a :ref:`window <curses-window-objects>` object
    which represents the whole screen.
 
+   See :func:`setupterm` for a caveat about calling it before this function.
+
    .. note::
 
       If there is an error opening the terminal, the underlying curses library may
@@ -105,6 +107,8 @@ Initialization and termination
 
    The new screen becomes the current one.
    Use :func:`set_term` to switch between screens.
+
+   See :func:`setupterm` for a caveat about calling it before this function.
 
    .. versionadded:: next
 
@@ -465,6 +469,8 @@ Mouse
 
    Return ``True`` if the mouse driver has been successfully initialized.
 
+   Availability: if the underlying curses library provides ``has_mouse()``.
+
    .. versionadded:: next
 
 
@@ -653,6 +659,131 @@ Windows and pads
    is to be displayed.
 
 
+Soft labels
+~~~~~~~~~~~
+
+.. _curses-slk:
+
+The following functions manage *soft-label keys*, a row of labels displayed
+along the bottom line of the screen, typically used to label a row of function
+keys.  :func:`slk_init` must be called before :func:`initscr` or
+:func:`newterm`; it takes one screen line away from the standard window for the
+labels.
+
+
+.. function:: slk_init(fmt=0)
+
+   Reserve a screen line for the soft labels and choose their layout.  *fmt*
+   selects the arrangement: ``0`` for 3-2-3 (eight labels), ``1`` for 4-4
+   (eight labels).  Where the underlying curses library supports them, ``2``
+   gives 4-4-4 (twelve labels) and ``3`` gives 4-4-4 with an index line.
+
+   Must be called before :func:`initscr` or :func:`newterm`.
+
+   .. versionadded:: next
+
+
+.. function:: slk_set(labnum, label, justify)
+
+   Set the text of soft label number *labnum*, in the range ``1`` through ``8``
+   (or ``12`` in a twelve-label layout).  *justify* controls how *label* is
+   placed within the label: ``0`` for left, ``1`` for centered, ``2`` for right.
+
+   .. versionadded:: next
+
+
+.. function:: slk_label(labnum)
+
+   Return the current text of soft label number *labnum*, justified as it was
+   set, or an empty string if it has no label.
+
+   .. versionadded:: next
+
+
+.. function:: slk_refresh()
+
+   Update the soft labels on the physical screen, like
+   :meth:`~curses.window.refresh` for a window.
+
+   .. versionadded:: next
+
+
+.. function:: slk_noutrefresh()
+
+   Update the soft labels on the virtual screen, like
+   :meth:`window.noutrefresh`.  Use it together with :func:`doupdate` to batch
+   screen updates.
+
+   .. versionadded:: next
+
+
+.. function:: slk_clear()
+
+   Remove the soft labels from the screen.
+
+   .. versionadded:: next
+
+
+.. function:: slk_restore()
+
+   Restore the soft labels to the screen after a :func:`slk_clear`.
+
+   .. versionadded:: next
+
+
+.. function:: slk_touch()
+
+   Force all the soft labels to be redrawn by the next :func:`slk_refresh` or
+   :func:`slk_noutrefresh`.
+
+   .. versionadded:: next
+
+
+.. function:: slk_attron(attr)
+              slk_attroff(attr)
+              slk_attrset(attr)
+
+   Add, remove, or set the attributes used to display the soft labels, given as
+   packed ``A_*`` attributes.
+
+   .. versionadded:: next
+
+
+.. function:: slk_attr()
+
+   Return the current attributes of the soft labels as packed ``A_*``
+   attributes.  Availability depends on the underlying curses library.
+
+   .. versionadded:: next
+
+
+.. function:: slk_attr_on(attr)
+              slk_attr_off(attr)
+
+   Turn the given attributes on or off without affecting any others.  Like the
+   ``attr_*`` window methods, these work with the
+   :ref:`WA_* attributes <curses-wa-constants>` rather than packed ``A_*``
+   attributes.
+
+   .. versionadded:: next
+
+
+.. function:: slk_attr_set(attr, pair=0)
+
+   Set the attributes and color pair of the soft labels.  *attr* is given as
+   :ref:`WA_* attributes <curses-wa-constants>` and *pair* as a color pair
+   number.
+
+   .. versionadded:: next
+
+
+.. function:: slk_color(pair)
+
+   Set the color pair of the soft labels to color pair number *pair*.
+
+   .. versionadded:: next
+
+
 Saving and restoring
 ~~~~~~~~~~~~~~~~~~~~
 
@@ -831,6 +962,13 @@ Terminfo database
    Raise a :exc:`curses.error` if the terminal could not be found or its
    terminfo database entry could not be read.  If the terminal has already
    been initialized, this function has no effect.
+
+   .. note::
+
+      Calling :func:`initscr` or :func:`newterm` after :func:`setupterm`
+      leaks the terminal that :func:`setupterm` allocated:
+      the curses library keeps only a single current terminal
+      and does not free the previously allocated one.
 
 .. function:: tigetflag(capname)
 
@@ -1183,6 +1321,8 @@ Reading window contents
    The bottom 8 bits are the character proper and the upper bits are the attributes;
    extract them with the :data:`A_CHARTEXT` and :data:`A_ATTRIBUTES` bit-masks,
    and the color pair with :func:`pair_number`.
+   The character byte is the locale-encoded byte of the cell's character,
+   consistent with :meth:`instr`.
    It cannot represent a cell holding combining characters, a character that does
    not fit in a single byte, or a color pair outside the :func:`color_pair`
    range; use :meth:`in_wch` for those, which returns it as a :class:`complexchar`.
