@@ -7,6 +7,7 @@ from dataclasses import *
 import abc
 import annotationlib
 import io
+import os
 import pickle
 import inspect
 import builtins
@@ -27,7 +28,12 @@ import typing       # Needed for the string "typing.ClassVar[int]" to work as an
 import dataclasses  # Needed for the string "dataclasses.InitVar[int]" to work as an annotation.
 
 from test import support
-from test.support import cpython_only, import_helper
+from test.support import cpython_only, import_helper, load_package_tests
+
+
+def load_tests(*args):
+    return load_package_tests(os.path.dirname(__file__), *args)
+
 
 # Just any custom exception we can catch.
 class CustomError(Exception): pass
