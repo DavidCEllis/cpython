@@ -3,6 +3,8 @@ import time
 import types
 import unittest
 
+from test.support.threading_helper import requires_working_threading
+
 from dataclasses import (
     _AutoMethod,
     _init_source_maker,
@@ -122,6 +124,7 @@ class TestLazyMethods(unittest.TestCase):
         self.assertIs(eq2, eq.generate())
 
 
+@requires_working_threading()
 class TestThreading(unittest.TestCase):
     @staticmethod
     def get_slow_init_class():
