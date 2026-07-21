@@ -26,6 +26,7 @@ __all__ = ['dataclass',
            'make_dataclass',
            'replace',
            'is_dataclass',
+           'is_dataclass_method',
            ]
 
 # Conditions for adding methods.  The boxes indicate what action the
