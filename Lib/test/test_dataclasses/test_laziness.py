@@ -62,6 +62,7 @@ class TestLazyMethods(unittest.TestCase):
 
         for name in METHOD_NAMES:
             automethod = AllMethods.__dict__[name]
+            self.assertIsInstance(automethod, _AutoMethod)
             self.assertTrue(is_dataclass_method(automethod))
 
     def test_is_dataclass_method_generated(self):
