@@ -4,6 +4,7 @@ if __name__ != 'test.support':
     raise ImportError('support must be imported from the test package')
 
 import annotationlib
+import compression
 import contextlib
 import functools
 import inspect
@@ -546,39 +547,24 @@ del x, y, HAVE_DOUBLE_ROUNDING
 
 
 def requires_zlib(reason='requires zlib'):
-    try:
-        import zlib
-    except ImportError:
-        zlib = None
-    return unittest.skipUnless(zlib, reason)
+    zlib_available = "zlib" in compression.AVAILABLE_MODULES
+    return unittest.skipUnless(zlib_available, reason)
 
 def requires_gzip(reason='requires gzip'):
-    try:
-        import gzip
-    except ImportError:
-        gzip = None
-    return unittest.skipUnless(gzip, reason)
+    gzip_available = "gzip" in compression.AVAILABLE_MODULES
+    return unittest.skipUnless(gzip_available, reason)
 
 def requires_bz2(reason='requires bz2'):
-    try:
-        import bz2
-    except ImportError:
-        bz2 = None
-    return unittest.skipUnless(bz2, reason)
+    bz2_available = "bz2" in compression.AVAILABLE_MODULES
+    return unittest.skipUnless(bz2_available, reason)
 
 def requires_lzma(reason='requires lzma'):
-    try:
-        import lzma
-    except ImportError:
-        lzma = None
-    return unittest.skipUnless(lzma, reason)
+    lzma_available = "lzma" in compression.AVAILABLE_MODULES
+    return unittest.skipUnless(lzma_available, reason)
 
 def requires_zstd(reason='requires zstd'):
-    try:
-        from compression import zstd
-    except ImportError:
-        zstd = None
-    return unittest.skipUnless(zstd, reason)
+    zstd_available = "zstd" in compression.AVAILABLE_MODULES
+    return unittest.skipUnless(zstd_available, reason)
 
 def has_no_debug_ranges():
     try:

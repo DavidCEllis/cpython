@@ -9,35 +9,13 @@ import sys
 import stat
 import fnmatch
 import collections
+import compression
 import errno
 
-try:
-    import zlib
-    del zlib
-    _ZLIB_SUPPORTED = True
-except ImportError:
-    _ZLIB_SUPPORTED = False
-
-try:
-    import bz2
-    del bz2
-    _BZ2_SUPPORTED = True
-except ImportError:
-    _BZ2_SUPPORTED = False
-
-try:
-    import lzma
-    del lzma
-    _LZMA_SUPPORTED = True
-except ImportError:
-    _LZMA_SUPPORTED = False
-
-try:
-    from compression import zstd
-    del zstd
-    _ZSTD_SUPPORTED = True
-except ImportError:
-    _ZSTD_SUPPORTED = False
+_BZ2_SUPPORTED = "bz2" in compression.AVAILABLE_MODULES
+_LZMA_SUPPORTED = "lzma" in compression.AVAILABLE_MODULES
+_ZLIB_SUPPORTED = "zlib" in compression.AVAILABLE_MODULES
+_ZSTD_SUPPORTED = "zstd" in compression.AVAILABLE_MODULES
 
 _WINDOWS = os.name == 'nt'
 posix = nt = None
