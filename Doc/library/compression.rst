@@ -18,3 +18,8 @@ and will not be removed without a deprecation cycle. The use of modules in
 * :mod:`!compression.zlib` -- Re-exports :mod:`zlib`
 * :mod:`compression.zstd` -- Wrapper for the Zstandard compression library
 
+.. data:: AVAILABLE_MODULES
+
+   A frozenset of all available compression submodule names.
+
+   .. versionadded:: next
