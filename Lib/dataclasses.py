@@ -1291,10 +1291,10 @@ def _process_class(cls, init, repr, eq, order, unsafe_hash, frozen,
     if slots:
         cls = _add_slots(cls, frozen, weakref_slot, fields)
 
-    abc.update_abstractmethods(cls)
-
     # Generate the methods and add them to the new class.
     func_builder.add_fns_to_class(cls)
+
+    abc.update_abstractmethods(cls)
 
     return cls
 
