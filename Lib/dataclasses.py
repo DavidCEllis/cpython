@@ -1046,6 +1046,42 @@ class _AutoMethod:
         return self.generate().__get__(obj, objtype)
 
 
+def _source_to_method(cls, name, source, locals=None, annotate=None, decorator=None):
+    # This takes generated source code and local names and converts it into
+    # a real method. Needed for dataclass methods generated from source templates.
+    if module := sys.modules.get(cls.__module__):
+        globals = module.__dict__
+    else:
+        # Theoretically this can happen if someone writes
+        # a custom string to cls.__module__.  In which case
+        # such dataclass won't be fully introspectable
+        # (w.r.t. typing.get_type_hints) but will still function
+        # correctly.
+        globals = {}
+
+    locals = {} if locals is None else locals
+    local_args = ", ".join(locals.keys())
+
+    ns = {}
+    txt = (
+        f"def __create_fn__({local_args}):\n"
+        f"{source}\n"
+        f" return {name}"
+    )
+    exec(txt, globals, ns)
+    method = ns["__create_fn__"](**locals)
+
+    method.__qualname__ = f"{cls.__qualname__}.{name}"
+
+    if annotate:
+        method.__annotate__ = annotate
+
+    if decorator:
+        method = decorator(method)
+
+    return method
+
+
 def _process_class(cls, init, repr, eq, order, unsafe_hash, frozen,
                    match_args, kw_only, slots, weakref_slot):
     # Now that dicts retain insertion order, there's no reason to use
