@@ -991,10 +991,12 @@ def _init_source_maker(name, cls):
 
 
 def _repr_source_maker(name, cls):
+    base_fields = cls.__dict__[_FIELDS]
+
     contents = ", ".join(
-        f"{f.name}={{self.{f.name}!r}}"
-        for f in fields(cls)
-        if f.repr
+        f"{name}={{self.{name}!r}}"
+        for name, f in base_fields.items()
+        if f._field_type is _FIELD and f.repr
     )
     code = (
         f' def {name}(self):\n'
@@ -1006,10 +1008,12 @@ def _repr_source_maker(name, cls):
 def _eq_source_maker(name, cls):
     # Create __eq__ method.  There's no need for a __ne__ method,
     # since python will call __eq__ and negate it.
+    base_fields = cls.__dict__[_FIELDS]
+
     terms = [
-        f"self.{f.name}==other.{f.name}"
-        for f in fields(cls)
-        if f.compare
+        f"self.{name}==other.{name}"
+        for name, f in base_fields.items()
+        if f._field_type is _FIELD and f.compare
     ]
     field_comparisons = " and ".join(terms) or "True"
     code = (
@@ -1029,7 +1033,11 @@ def _order_source_maker(op):
         # named 'x' and 'y', then self_tuple is the string
         # '(self.x,self.y)' and other_tuple is the string
         # '(other.x,other.y)'.
-        flds = [f for f in fields(cls) if f.compare]
+        base_fields = cls.__dict__[_FIELDS]
+        flds = [
+            f for f in base_fields.values()
+            if f._field_type is _FIELD and f.compare
+        ]
         self_tuple = _tuple_str('self', flds)
         other_tuple = _tuple_str('other', flds)
 
@@ -1052,7 +1060,11 @@ _ge_maker = _order_source_maker(">=")
 def _frozen_setattr_maker(name, cls):
     # This does not depend on accessing attributes from instances
     # so the function can be created directly
-    flds = set(f.name for f in fields(cls))
+    base_fields = cls.__dict__[_FIELDS]
+    flds = set(
+        name for name, f in base_fields.items()
+        if f._field_type is _FIELD
+    )
 
     def __setattr__(self, name, value):
         if type(self) is cls or name in flds:
@@ -1068,7 +1080,11 @@ def _frozen_setattr_maker(name, cls):
 def _frozen_delattr_maker(name, cls):
     # This does not depend on accessing attributes from instances
     # so the function can be created directly
-    flds = set(f.name for f in fields(cls))
+    base_fields = cls.__dict__[_FIELDS]
+    flds = set(
+        name for name, f in base_fields.items()
+        if f._field_type is _FIELD
+    )
 
     def __delattr__(self, name):
         if type(self) is cls or name in flds:
@@ -1082,7 +1098,12 @@ def _frozen_delattr_maker(name, cls):
 
 
 def _hash_source_maker(name, cls):
-    flds = [f for f in fields(cls) if (f.compare if f.hash is None else f.hash)]
+    base_fields = cls.__dict__[_FIELDS]
+    flds = [
+        f for f in base_fields.values()
+        if f._field_type is _FIELD
+        and (f.compare if f.hash is None else f.hash)
+    ]
     self_tuple = _tuple_str('self', flds)
 
     code = (
